@@ -14,7 +14,7 @@ from argparse import ArgumentParser
 import time
 import json
 
-def get_option(game_time, manual, use_sample, drop_speed, random_seed, obstacle_height, obstacle_probability, resultlogjson):
+def get_option(game_time, manual, use_sample, drop_speed, random_seed, obstacle_height, obstacle_probability, resultlogjson, train_mode):
     argparser = ArgumentParser()
     argparser.add_argument('--game_time', type=int,
                            default=game_time,
@@ -40,6 +40,9 @@ def get_option(game_time, manual, use_sample, drop_speed, random_seed, obstacle_
     argparser.add_argument('--resultlogjson', type=str,
                            default=resultlogjson,
                            help='result json log file path')
+    argparser.add_argument('--train_mode',
+                           default=train_mode,
+                           help='Specify train mode for NN')
     return argparser.parse_args()
 
 class Game_Manager(QMainWindow):
@@ -67,6 +70,7 @@ class Game_Manager(QMainWindow):
         self.obstacle_height = 0
         self.obstacle_probability = 0
         self.resultlogjson = ""
+        self.train_mode = None
         args = get_option(self.game_time,
                           self.manual,
                           self.use_sample,
@@ -74,7 +78,8 @@ class Game_Manager(QMainWindow):
                           self.random_seed,
                           self.obstacle_height,
                           self.obstacle_probability,
-                          self.resultlogjson)
+                          self.resultlogjson,
+                          self.train_mode)
         if args.game_time >= 0:
             self.game_time = args.game_time
         if args.manual == "y":
@@ -91,6 +96,9 @@ class Game_Manager(QMainWindow):
             self.obstacle_probability = args.obstacle_probability
         if len(args.resultlogjson) != 0:
             self.resultlogjson = args.resultlogjson
+        if args.train_mode == "y":
+            self.train_mode = args.train_mode
+            self.drop_speed = 50
         self.initUI()
 
     def initUI(self):
@@ -116,14 +124,117 @@ class Game_Manager(QMainWindow):
         self.statusbar = self.statusBar()
         self.tboard.msg2Statusbar[str].connect(self.statusbar.showMessage)
 
-        self.start()
+        if self.train_mode == "y":
+            self.train()
+        else:
+            self.start()
 
         self.center()
         self.setWindowTitle('Tetris')
         self.show()
 
         self.setFixedSize(self.tboard.width() + self.sidePanel.width(),
-                          self.sidePanel.height() + self.statusbar.height())
+                        self.sidePanel.height() + self.statusbar.height())
+
+    def train(self):
+        if self.isPaused:
+            return
+
+        self.isStarted = True
+        self.tboard.score = 0
+        BOARD_DATA.clear()
+        BOARD_DATA.createNewPiece()
+        self.tboard.msg2Statusbar.emit(str(self.tboard.score))
+        self.timer.start(self.speed, self)
+
+    def _rotate_operation(self, next_direction):
+        k = 0
+        while BOARD_DATA.currentDirection != next_direction and k < 4:
+            ret = BOARD_DATA.rotateRight()
+            if ret == False:
+                print("cannot rotateRight")
+                break
+            k += 1
+
+    def _x_operation(self, next_x):
+        k = 0
+        while BOARD_DATA.currentX != next_x and k < 5:
+            if BOARD_DATA.currentX > next_x:
+                ret = BOARD_DATA.moveLeft()
+                if ret == False:
+                    print("cannot moveLeft")
+                    break
+            elif BOARD_DATA.currentX < next_x:
+                ret = BOARD_DATA.moveRight()
+                if ret == False:
+                    print("cannot moveRight")
+                    break
+            k += 1
+
+    def _y_operation(self, y_operation, next_y_moveblocknum):
+        removedlines, dropdownlines = 0, 0
+        if y_operation == 1: # dropdown
+            removedlines, dropdownlines = BOARD_DATA.dropDown()
+        else: # movedown, with next_y_moveblocknum lines
+            k = 0
+            while True:
+                removedlines, movedownlines = BOARD_DATA.moveDown()
+                if movedownlines < 1:
+                    # if already dropped
+                    break
+                k += 1
+                if k >= next_y_moveblocknum:
+                    # if already movedown next_y_moveblocknum block
+                    break
+        return removedlines, dropdownlines
+
+    def step(self):
+        next_x = 0
+        next_y_moveblocknum = 0
+        y_operation = -1
+
+        if BLOCK_CONTROLLER and not self.nextMove:
+            # update CurrentBlockIndex
+            if BOARD_DATA.currentY <= 1:
+                self.block_index = self.block_index + 1
+
+            # nextMove data structure
+            nextMove = {"strategy":
+                            {
+                                "direction": "none",    # next shape direction ( 0 - 3 )
+                                "x": "none",            # next x position (range: 0 - (witdh-1) )
+                                "y_operation": "none",  # movedown or dropdown (0:movedown, 1:dropdown)
+                                "y_moveblocknum": "none", # amount of next y movement
+                                },
+                        }
+            # get nextMove from GameController
+            GameStatus = self.getGameStatus()
+            self.nextMove = BLOCK_CONTROLLER.GetNextMove(nextMove, GameStatus)
+
+        if self.nextMove:
+            next_x = self.nextMove["strategy"]["x"]
+            next_y_moveblocknum = self.nextMove["strategy"]["y_moveblocknum"]
+            y_operation = self.nextMove["strategy"]["y_operation"]
+            next_direction = self.nextMove["strategy"]["direction"]
+            self._rotate_operation(next_direction) # shape direction operation
+            self._x_operation(next_x) # x operation
+
+        # dropdown/movedown lines
+        removedlines, dropdownlines = self._y_operation(y_operation, next_y_moveblocknum)
+
+        self.UpdateScore(removedlines, dropdownlines)
+
+        # check reset field
+        if BOARD_DATA.currentY < 1:
+            # if Piece cannot movedown and stack, reset field
+            print("reset field.")
+            self.resetfield()
+
+        # init nextMove
+        self.nextMove = None
+
+        # update window
+        self.updateWindow()
 
     def center(self):
         screen = QDesktopWidget().screenGeometry()
@@ -171,6 +282,9 @@ class Game_Manager(QMainWindow):
         # callback function for user control
 
         if event.timerId() == self.timer.timerId():
+            if self.train_mode == "y":
+                self.step()
+                return
             next_x = 0
             next_y_moveblocknum = 0
             y_operation = -1
