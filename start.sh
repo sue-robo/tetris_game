@@ -1,12 +1,12 @@
 #!/bin/bash
 
 ## default value
-VALUE_L="1"
+VALUE_L="2"
 IS_MANUAL_CONTROLL="n"
 IS_SAMPLE_CONTROLL="n"
 GAME_TIME="180"                  # game time (s)
 RESULT_LOG_JSON="result.json"    # result log file
-
+TRAIN_MODE="y"
 ## get args level setting
 while getopts l:m:s:t:f: OPT
 do
@@ -38,6 +38,7 @@ echo "game_time: $GAME_TIME"
 echo "RANDOM_SEED: $RANDOM_SEED"
 echo "OBSTACLE_HEIGHT: ${OBSTACLE_HEIGHT}"
 echo "OBSTACLE_PROBABILITY: ${OBSTACLE_PROBABILITY}"
+echo "TRAIN_MODE: ${TRAIN_MODE}"
 
 ## start game
-python3 game_manager/game_manager.py --game_time ${GAME_TIME} --seed ${RANDOM_SEED} --obstacle_height ${OBSTACLE_HEIGHT} --obstacle_probability ${OBSTACLE_PROBABILITY} --drop_speed ${DROP_SPEED} --manual ${IS_MANUAL_CONTROLL} --use_sample ${IS_SAMPLE_CONTROLL} --resultlogjson ${RESULT_LOG_JSON}
+python game_manager/game_manager.py --game_time ${GAME_TIME} --seed ${RANDOM_SEED} --obstacle_height ${OBSTACLE_HEIGHT} --obstacle_probability ${OBSTACLE_PROBABILITY} --drop_speed ${DROP_SPEED} --manual ${IS_MANUAL_CONTROLL} --use_sample ${IS_SAMPLE_CONTROLL} --resultlogjson ${RESULT_LOG_JSON} --train_mode ${TRAIN_MODE}
