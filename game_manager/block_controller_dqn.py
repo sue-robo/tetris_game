@@ -11,17 +11,18 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
+'''
 class DeepQNetwork(nn.Module):
     def __init__(self, input, output):
         super(DeepQNetwork, self).__init__()
-        self.fc1 = nn.Linear(input, 64)
+        self.fc1 = nn.Linear(input, 512)
         self.relu1 = nn.ReLU()
-        self.fc2 = nn.Linear(64, 64)
+        self.fc2 = nn.Linear(512, 128)
         self.relu2 = nn.ReLU()
-        self.fc3 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(128, 64)
         self.relu3 = nn.ReLU()
         self.out = nn.Linear(64, output)
-    
+
     def forward(self, x):
         x = self.fc1(x)
         x = self.relu1(x)
@@ -31,13 +32,37 @@ class DeepQNetwork(nn.Module):
         x = self.relu3(x)
         x = self.out(x)
         return x
+'''
+class DeepQNetwork(nn.Module):
+    def __init__(self, output):
+        super(DeepQNetwork, self).__init__()
+        self.conv1 = nn.Conv2d(1, 16, 3)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 16, 3)
+        self.bn2 = nn.BatchNorm2d(16)
+        self.conv3 = nn.Conv2d(16, 32, 3)
+        self.bn3 = nn.BatchNorm2d(32)
+        self.fc = nn.Linear(2560, 256)
+        self.head = nn.Linear(256, output)
+    
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = x.view(x.size()[0],-1)
+        x = self.fc(x)
+        x = self.head(x)
+        return x
 
 class DeepQNetworkAgent():
     def __init__(self, lr=1e-2):
-        self.num_states = 11
+        self.board_h = 22
+        self.board_w = 10
+        self.block_h = 4
+        self.num_states = self.board_h * self.board_w
         self.num_actions = 9*4 # range(x) * range(direction)
-        self.model = DeepQNetwork(self.num_states, self.num_actions)
-        self.teacher_model = DeepQNetwork(self.num_states, self.num_actions)
+        self.model = DeepQNetwork(self.num_actions)
+        self.teacher_model = DeepQNetwork(self.num_actions)
 
         self.max_experiences = 10_000
         self.min_experiences = 100
@@ -111,7 +136,7 @@ class DeepQNetworkAgent():
                 w = w1 if w1 >= w2 else w2
                 wells.append(w)
         return wells
-
+    '''
     def get_state(self, board, block):
         peaks = self._get_peaks(board)
         highest_peak = np.max(peaks)
@@ -127,18 +152,64 @@ class DeepQNetworkAgent():
         max_wells = np.max(wells)
         current_shape = block["currentShape"]["index"]
         next_shape = block["nextShape"]["index"]
-        return \
-            highest_peak, \
-            aggregated_height, \
-            n_holes, \
-            n_col_with_holes, \
-            row_transitions, \
-            col_transitions, \
-            bumpiness, \
-            n_pits, \
-            max_wells, \
-            current_shape, \
-            next_shape
+        return np.array([
+                            highest_peak, \
+                            aggregated_height, \
+                            n_holes, \
+                            n_col_with_holes, \
+                            row_transitions, \
+                            col_transitions, \
+                            bumpiness, \
+                            n_pits, \
+                            max_wells, \
+                            current_shape, \
+                            next_shape
+                        ])
+    '''
+    def get_state(self, board, block):
+        if block["nextShape"]["index"] == 1:
+            state = [0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 2, 0, 0, 0, 0]
+        elif block["nextShape"]["index"] == 2:
+            state = [0, 0, 0, 0, 2, 0, 0, 0, 0, 0,
+                     0, 0, 0, 0, 2, 0, 0, 0, 0, 0,
+                     0, 0, 0, 0, 2, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        elif block["nextShape"]["index"] == 3:
+            state = [0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 2, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        elif block["nextShape"]["index"] == 4:
+            state = [0, 0, 0, 0, 2, 0, 0, 0, 0, 0,
+                     0, 0, 0, 0, 2, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 2, 0, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        elif block["nextShape"]["index"] == 5:
+            state = [0, 0, 0, 0, 2, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 2, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        elif block["nextShape"]["index"] == 6:
+            state = [0, 0, 0, 0, 0, 2, 2, 0, 0, 0,
+                     0, 0, 0, 0, 2, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        elif block["nextShape"]["index"] == 7:
+            state = [0, 0, 0, 0, 2, 2, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 2, 2, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        else:
+            state = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        state = np.array(state).reshape(4, 10)
+        state = np.vstack((state, board))
+        return state
 
     def add_experience(self, exp):
         if len(self.experience['s']) >= self.max_experiences:
@@ -148,10 +219,14 @@ class DeepQNetworkAgent():
             self.experience[key].append(value)
 
     def estimate(self, state):
-        return self.model(torch.from_numpy(state).float())
+        return self.model(
+            torch.from_numpy(state).view(-1, 1, self.board_w, self.board_h+self.block_h).float()
+        )
 
     def future(self, state):
-        return self.teacher_model(torch.from_numpy(state).float())
+        return self.teacher_model(
+            torch.from_numpy(state).view(-1, 1, self.board_w, self.board_h+self.block_h).float()
+        )
 
     def policy(self, state, epsilon):
         if random.random() < epsilon:
@@ -159,7 +234,7 @@ class DeepQNetworkAgent():
             x = random.randint(0,9)
             action = x * 4 + direction
         else:
-            prediction = self.estimate(np.array(state)).detach().numpy()
+            prediction = self.estimate(state).detach().numpy()
             action = np.argmax(prediction)
         return action
     
@@ -213,10 +288,13 @@ class Block_Controller(object):
         self.prev_gameover_count = 0
         self.prev_score = 0
         self.gamma = 0.6
+        d = datetime.now()
+        self.duration = d - d
 
 
     def _custom_reward(self, reward, done):
         if done:
+            print("done, reward = ", done, reward)
             if reward > 0:
                 return 1
             elif reward < 0:
@@ -239,12 +317,17 @@ class Block_Controller(object):
         ##### add 
         height = GameStatus["field_info"]["height"]
         width = GameStatus["field_info"]["width"]
+        block = GameStatus["block_info"]
+        '''
         board = GameStatus["field_info"]["backboard"]
         board = np.array(board).reshape([height, width])
         board = np.where(board != 0, 1, 0)
-        block = GameStatus["block_info"]
-        state = list(self.agent.get_state(board, block))
+        state = self.agent.get_state(board, block)
         pprint.pprint(state)
+        '''
+        board = np.array(GameStatus["field_info"]["withblock"]).reshape([height,width])
+        board = np.where(board != 0, 1, 0)
+        state = self.agent.get_state(board, block)
         score = GameStatus["judge_info"]["score"]
         done = GameStatus["judge_info"]["gameover_count"] != self.prev_gameover_count
         iter = GameStatus["judge_info"]["block_index"]
@@ -269,7 +352,9 @@ class Block_Controller(object):
         nextMove["strategy"]["y_operation"] = y_operation
         nextMove["strategy"]["y_moveblocknum"] = y_moveblocknum
 
-        print("===", datetime.now() - t1)
+        d = datetime.now() - t1
+        self.duration = max(self.duration, d)
+        print("===", d, " / ", self.duration)
         print(nextMove)
         return nextMove
 
