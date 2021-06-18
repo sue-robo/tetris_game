@@ -274,9 +274,14 @@ class Game_Manager(QMainWindow):
         BOARD_DATA.createNewPiece()
 
     def updateWindow(self):
-        self.tboard.updateData()
-        self.sidePanel.updateData()
-        self.update()
+        done = self.tboard.updateData()
+        if not done:
+            self.sidePanel.updateData()
+            self.update()
+        else:
+            BLOCK_CONTROLLER.callback_on_exit()
+            sys.exit(0)
+        return done
 
     def timerEvent(self, event):
         # callback function for user control
@@ -707,7 +712,9 @@ class Board(QFrame):
                     f.write(GameStatusJson)
 
             #sys.exit(app.exec_())
-            sys.exit(0)
+            #sys.exit(0)
+            return True
+        return False
 
 if __name__ == '__main__':
     app = QApplication([])

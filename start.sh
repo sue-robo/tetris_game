@@ -4,7 +4,7 @@
 VALUE_L="2"
 IS_MANUAL_CONTROLL="n"
 IS_SAMPLE_CONTROLL="n"
-GAME_TIME="180"                  # game time (s)
+GAME_TIME="18000"                  # game time (s)
 RESULT_LOG_JSON="result.json"    # result log file
 TRAIN_MODE="y"
 ## get args level setting
