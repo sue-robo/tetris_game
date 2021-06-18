@@ -13,6 +13,7 @@ from block_controller_sample import BLOCK_CONTROLLER_SAMPLE
 from argparse import ArgumentParser
 import time
 import json
+import pprint
 
 def get_option(game_time, manual, use_sample, drop_speed, random_seed, obstacle_height, obstacle_probability, resultlogjson, train_mode):
     argparser = ArgumentParser()
@@ -82,7 +83,7 @@ class Game_Manager(QMainWindow):
                           self.train_mode)
         if args.game_time >= 0:
             self.game_time = args.game_time
-        if args.manual == "y":
+        if args.manual in ("y", "g"):
             self.manual = args.manual
         if args.use_sample == "y":
             self.use_sample = args.use_sample
@@ -316,7 +317,7 @@ class Game_Manager(QMainWindow):
                 else:
                     self.nextMove = BLOCK_CONTROLLER.GetNextMove(nextMove, GameStatus)
 
-                if self.manual == "y":
+                if self.manual in ("y", "g"):
                     # ignore nextMove, for manual controll
                     self.nextMove["strategy"]["x"] = BOARD_DATA.currentX
                     self.nextMove["strategy"]["y_moveblocknum"] = 1
@@ -397,6 +398,8 @@ class Game_Manager(QMainWindow):
         else:
             linescore = 0
         dropdownscore = dropdownlines
+        self.tboard.dropdownscore += dropdownscore
+        self.tboard.linescore += linescore
         self.tboard.score += ( linescore + dropdownscore )
         self.tboard.line += removedlines
         if removedlines > 0:
@@ -410,6 +413,7 @@ class Game_Manager(QMainWindow):
                         "width": "none",
                         "height": "none",
                         "backboard": "none",
+                        "withblock": "none", # back board with current block
                       },
                   "block_info":
                       {
@@ -438,6 +442,8 @@ class Game_Manager(QMainWindow):
                       },
                   "debug_info":
                       {
+                        "dropdownscore":"none",
+                        "linescore":"none",
                         "line_score": {
                           "1":"none",
                           "2":"none",
@@ -488,6 +494,7 @@ class Game_Manager(QMainWindow):
         status["field_info"]["width"] = BOARD_DATA.width
         status["field_info"]["height"] = BOARD_DATA.height
         status["field_info"]["backboard"] = BOARD_DATA.getData()
+        status["field_info"]["withblock"] = BOARD_DATA.getDataWithCurrentBlock()
         ## shape
         status["block_info"]["currentX"] = BOARD_DATA.currentX
         status["block_info"]["currentY"] = BOARD_DATA.currentY
@@ -520,6 +527,8 @@ class Game_Manager(QMainWindow):
         status["judge_info"]["line"] = self.tboard.line
         status["judge_info"]["block_index"] = self.block_index
         ## debug_info
+        status["debug_info"]["dropdownscore"] = self.tboard.dropdownscore
+        status["debug_info"]["linescore"] = self.tboard.linescore
         status["debug_info"]["line_score_stat"] = self.tboard.line_score_stat
         status["debug_info"]["shape_info_stat"] = BOARD_DATA.shape_info_stat
         status["debug_info"]["line_score"]["1"] = Game_Manager.LINE_SCORE_1
@@ -549,6 +558,52 @@ class Game_Manager(QMainWindow):
 
     def getGameStatusJson(self):
         status = {
+                  "debug_info":
+                      {
+                        "line_score": {
+                          "1":"none",
+                          "2":"none",
+                          "3":"none",
+                          "4":"none",
+                          "gameover":"none",
+                        },
+                        "shape_info": {
+                          "shapeNone": {
+                             "index" : "none",
+                             "color" : "none",
+                          },
+                          "shapeI": {
+                             "index" : "none",
+                             "color" : "none",
+                          },
+                          "shapeL": {
+                             "index" : "none",
+                             "color" : "none",
+                          },
+                          "shapeJ": {
+                             "index" : "none",
+                             "color" : "none",
+                          },
+                          "shapeT": {
+                             "index" : "none",
+                             "color" : "none",
+                          },
+                          "shapeO": {
+                             "index" : "none",
+                             "color" : "none",
+                          },
+                          "shapeS": {
+                             "index" : "none",
+                             "color" : "none",
+                          },
+                          "shapeZ": {
+                             "index" : "none",
+                             "color" : "none",
+                          },
+                        },
+                        "line_score_stat":"none",
+                        "shape_info_stat":"none",
+                      },
                   "judge_info":
                       {
                         "elapsed_time":"none",
@@ -560,6 +615,29 @@ class Game_Manager(QMainWindow):
                       },
                   }
         # update status
+        ## debug_info
+        status["debug_info"]["line_score_stat"] = self.tboard.line_score_stat
+        status["debug_info"]["shape_info_stat"] = BOARD_DATA.shape_info_stat
+        status["debug_info"]["line_score"]["1"] = Game_Manager.LINE_SCORE_1
+        status["debug_info"]["line_score"]["2"] = Game_Manager.LINE_SCORE_2
+        status["debug_info"]["line_score"]["3"] = Game_Manager.LINE_SCORE_3
+        status["debug_info"]["line_score"]["4"] = Game_Manager.LINE_SCORE_4
+        status["debug_info"]["line_score"]["gameover"] = Game_Manager.GAMEOVER_SCORE
+        status["debug_info"]["shape_info"]["shapeNone"]["index"] = Shape.shapeNone
+        status["debug_info"]["shape_info"]["shapeI"]["index"] = Shape.shapeI
+        status["debug_info"]["shape_info"]["shapeI"]["color"] = "red"
+        status["debug_info"]["shape_info"]["shapeL"]["index"] = Shape.shapeL
+        status["debug_info"]["shape_info"]["shapeL"]["color"] = "green"
+        status["debug_info"]["shape_info"]["shapeJ"]["index"] = Shape.shapeJ
+        status["debug_info"]["shape_info"]["shapeJ"]["color"] = "purple"
+        status["debug_info"]["shape_info"]["shapeT"]["index"] = Shape.shapeT
+        status["debug_info"]["shape_info"]["shapeT"]["color"] = "gold"
+        status["debug_info"]["shape_info"]["shapeO"]["index"] = Shape.shapeO
+        status["debug_info"]["shape_info"]["shapeO"]["color"] = "pink"
+        status["debug_info"]["shape_info"]["shapeS"]["index"] = Shape.shapeS
+        status["debug_info"]["shape_info"]["shapeS"]["color"] = "blue"
+        status["debug_info"]["shape_info"]["shapeZ"]["index"] = Shape.shapeZ
+        status["debug_info"]["shape_info"]["shapeZ"]["color"] = "yellow"
         ## judge_info
         status["judge_info"]["elapsed_time"] = round(time.time() - self.tboard.start_time, 3)
         status["judge_info"]["game_time"] = self.game_time
@@ -578,6 +656,11 @@ class Game_Manager(QMainWindow):
 
         key = event.key()
         
+        # key event handle process.
+        # depends on self.manual, it's better to make key config file.
+        #  "y" : PC keyboard controller
+        #  "g" : game controller. KeyUp, space are different from "y"
+
         if key == Qt.Key_P:
             self.pause()
             return
@@ -588,12 +671,12 @@ class Game_Manager(QMainWindow):
             BOARD_DATA.moveLeft()
         elif key == Qt.Key_Right:
             BOARD_DATA.moveRight()
-        elif key == Qt.Key_Up:
+        elif (key == Qt.Key_Up and self.manual == 'y') or (key == Qt.Key_Space and self.manual == 'g'):
             BOARD_DATA.rotateLeft()
         elif key == Qt.Key_M:
             removedlines, movedownlines = BOARD_DATA.moveDown()
             self.UpdateScore(removedlines, 0)
-        elif key == Qt.Key_Space:
+        elif (key == Qt.Key_Space and self.manual == 'y') or (key == Qt.Key_Up and self.manual == 'g'):
             removedlines, dropdownlines = BOARD_DATA.dropDown()
             self.UpdateScore(removedlines, dropdownlines)
         else:
@@ -655,6 +738,8 @@ class Board(QFrame):
 
     def initBoard(self, random_seed_Nextshape, obstacle_height, obstacle_probability):
         self.score = 0
+        self.dropdownscore = 0
+        self.linescore = 0
         self.line = 0
         self.line_score_stat = [0, 0, 0, 0]
         self.reset_cnt = 0
@@ -700,6 +785,21 @@ class Board(QFrame):
             print("")
             print("##### YOUR_RESULT #####")
             print(status_str)
+            print("")
+            print("##### SCORE DETAIL #####")
+            GameStatus = GAME_MANEGER.getGameStatus()
+            line_score_stat = GameStatus["debug_info"]["line_score_stat"]
+            line_Score = GameStatus["debug_info"]["line_score"]
+            gameover_count = GameStatus["judge_info"]["gameover_count"]
+            score = GameStatus["judge_info"]["score"]
+            dropdownscore = GameStatus["debug_info"]["dropdownscore"]
+            print("  1 line: " + str(line_Score["1"]) + " * " + str(line_score_stat[0]) + " = " + str(line_Score["1"] * line_score_stat[0]))
+            print("  2 line: " + str(line_Score["2"]) + " * " + str(line_score_stat[1]) + " = " + str(line_Score["2"] * line_score_stat[1]))
+            print("  3 line: " + str(line_Score["3"]) + " * " + str(line_score_stat[2]) + " = " + str(line_Score["3"] * line_score_stat[2]))
+            print("  4 line: " + str(line_Score["4"]) + " * " + str(line_score_stat[3]) + " = " + str(line_Score["4"] * line_score_stat[3]))
+            print("  dropdownscore: " + str(dropdownscore))
+            print("  gameover: : " + str(line_Score["gameover"]) + " * " + str(gameover_count) + " = " + str(line_Score["gameover"] * gameover_count))
+
             print("##### ###### #####")
             print("")
 
