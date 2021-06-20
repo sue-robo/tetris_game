@@ -312,9 +312,10 @@ class DeepQNetworkTrainer():
         line_reward = 0
         for i in range(4):
             line_reward += (i+1)*(i+1) * line_score_stat[i]
-        gameover_penalty = gameover_count * 5
+        gameover_penalty = gameover_count
 
         if done:
+            print(f'line_reward , gameover_penalty = {line_reward}, {gameover_penalty}')
             return line_reward - gameover_penalty
         else:
             return 0
@@ -322,7 +323,7 @@ class DeepQNetworkTrainer():
     def train(self, env, episode_cnt=1000, min_epsilon=0.1, epsilon_decay_rate=0.99, gamma=0.6):
         self.agent = DeepQNetworkAgent()
         iter = 0
-        for episode in tqdm(range(episode_cnt)):
+        for episode in range(episode_cnt):
             GameStatus = env.reset()
             state = get_state(GameStatus)
             self.epsilon = max(min_epsilon, self.epsilon * epsilon_decay_rate)
@@ -348,8 +349,8 @@ class DeepQNetworkTrainer():
                 iter += 1
                 if iter % 100 == 0:
                     self.agent.update_teacher()
-                self.reward_log.append(reward)
-        self.agent.save_network('dqn.prm')
+                #self.reward_log.append(reward)
+        self.agent.save_network('dqn.prm', 'dqn_teacher.prm')
                 
 class Block_Controller(object):
     def __init__(self):
