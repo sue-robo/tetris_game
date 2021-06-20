@@ -102,7 +102,8 @@ class Game_Manager(QMainWindow):
             self.resultlogjson = args.resultlogjson
         if args.train_mode == "y":
             self.train_mode = args.train_mode
-            self.drop_speed = 50
+            self.episode_cnt = 100000
+            self.qwait_msec = 10
         self.initUI()
 
     def initUI(self):
@@ -138,11 +139,8 @@ class Game_Manager(QMainWindow):
             BOARD_DATA.clear()
             BOARD_DATA.createNewPiece()
             self.tboard.msg2Statusbar.emit(str(self.tboard.score))
-
-            DQN_TRAINER.train(self, episode_cnt=20000)
-
+            DQN_TRAINER.train(self, episode_cnt=self.episode_cnt)
             sys.exit(0)
-
         else:
             self.timer = QBasicTimer()
             self.start()
@@ -194,7 +192,8 @@ class Game_Manager(QMainWindow):
         return removedlines, dropdownlines
 
     def reset(self):
-        self.resetfield()
+        BOARD_DATA.clear()
+        BOARD_DATA.createNewPiece()
         return self.getGameStatus()
 
 
@@ -219,7 +218,7 @@ class Game_Manager(QMainWindow):
         self.tboard.updateData()
         self.sidePanel.updateData()
         self.update()
-        QTest.qWait(10)
+        QTest.qWait(self.qwait_msec)
         return GameStatus, reward, done
 
     def center(self):
