@@ -5,6 +5,7 @@ import sys
 from PyQt5.QtWidgets import QMainWindow, QFrame, QDesktopWidget, QApplication, QHBoxLayout, QLabel
 from PyQt5.QtCore import Qt, QBasicTimer, pyqtSignal
 from PyQt5.QtGui import QPainter, QColor
+from PyQt5.QtTest import QTest
 
 from board_manager import BOARD_DATA, Shape
 from block_controller import BLOCK_CONTROLLER
@@ -14,6 +15,8 @@ from argparse import ArgumentParser
 import time
 import json
 import pprint
+
+from block_controller import DQN_TRAINER
 
 def get_option(game_time, manual, use_sample, drop_speed, random_seed, obstacle_height, obstacle_probability, resultlogjson, train_mode):
     argparser = ArgumentParser()
@@ -106,7 +109,6 @@ class Game_Manager(QMainWindow):
         self.gridSize = 22
         self.speed = self.drop_speed # block drop speed
 
-        self.timer = QBasicTimer()
         self.setFocusPolicy(Qt.StrongFocus)
 
         hLayout = QHBoxLayout()
@@ -126,34 +128,36 @@ class Game_Manager(QMainWindow):
         self.tboard.msg2Statusbar[str].connect(self.statusbar.showMessage)
 
         if self.train_mode == "y":
-            self.train()
+            self.center()
+            self.setWindowTitle('Tetris')
+            self.show()
+            self.setFixedSize(self.tboard.width() + self.sidePanel.width(),
+                            self.sidePanel.height() + self.statusbar.height())
+            self.isStarted = True
+            self.tboard.score = 0
+            BOARD_DATA.clear()
+            BOARD_DATA.createNewPiece()
+            self.tboard.msg2Statusbar.emit(str(self.tboard.score))
+
+            DQN_TRAINER.train(self, episode_cnt=20000)
+
+            sys.exit(0)
+
         else:
+            self.timer = QBasicTimer()
             self.start()
-
-        self.center()
-        self.setWindowTitle('Tetris')
-        self.show()
-
-        self.setFixedSize(self.tboard.width() + self.sidePanel.width(),
-                        self.sidePanel.height() + self.statusbar.height())
-
-    def train(self):
-        if self.isPaused:
-            return
-
-        self.isStarted = True
-        self.tboard.score = 0
-        BOARD_DATA.clear()
-        BOARD_DATA.createNewPiece()
-        self.tboard.msg2Statusbar.emit(str(self.tboard.score))
-        self.timer.start(self.speed, self)
+            self.center()
+            self.setWindowTitle('Tetris')
+            self.show()
+            self.setFixedSize(self.tboard.width() + self.sidePanel.width(),
+                            self.sidePanel.height() + self.statusbar.height())
 
     def _rotate_operation(self, next_direction):
         k = 0
         while BOARD_DATA.currentDirection != next_direction and k < 4:
             ret = BOARD_DATA.rotateRight()
             if ret == False:
-                print("cannot rotateRight")
+                #print("cannot rotateRight")
                 break
             k += 1
 
@@ -163,12 +167,12 @@ class Game_Manager(QMainWindow):
             if BOARD_DATA.currentX > next_x:
                 ret = BOARD_DATA.moveLeft()
                 if ret == False:
-                    print("cannot moveLeft")
+                    #print("cannot moveLeft")
                     break
             elif BOARD_DATA.currentX < next_x:
                 ret = BOARD_DATA.moveRight()
                 if ret == False:
-                    print("cannot moveRight")
+                    #print("cannot moveRight")
                     break
             k += 1
 
@@ -189,53 +193,34 @@ class Game_Manager(QMainWindow):
                     break
         return removedlines, dropdownlines
 
-    def step(self):
-        next_x = 0
-        next_y_moveblocknum = 0
-        y_operation = -1
+    def reset(self):
+        self.resetfield()
+        return self.getGameStatus()
 
-        if BLOCK_CONTROLLER and not self.nextMove:
-            # update CurrentBlockIndex
-            if BOARD_DATA.currentY <= 1:
-                self.block_index = self.block_index + 1
 
-            # nextMove data structure
-            nextMove = {"strategy":
-                            {
-                                "direction": "none",    # next shape direction ( 0 - 3 )
-                                "x": "none",            # next x position (range: 0 - (witdh-1) )
-                                "y_operation": "none",  # movedown or dropdown (0:movedown, 1:dropdown)
-                                "y_moveblocknum": "none", # amount of next y movement
-                                },
-                        }
-            # get nextMove from GameController
-            GameStatus = self.getGameStatus()
-            self.nextMove = BLOCK_CONTROLLER.GetNextMove(nextMove, GameStatus)
-
-        if self.nextMove:
-            next_x = self.nextMove["strategy"]["x"]
-            next_y_moveblocknum = self.nextMove["strategy"]["y_moveblocknum"]
-            y_operation = self.nextMove["strategy"]["y_operation"]
-            next_direction = self.nextMove["strategy"]["direction"]
-            self._rotate_operation(next_direction) # shape direction operation
-            self._x_operation(next_x) # x operation
-
-        # dropdown/movedown lines
+    def step(self, nextMove):
+        next_x = nextMove["strategy"]["x"]
+        next_y_moveblocknum = nextMove["strategy"]["y_moveblocknum"]
+        y_operation = nextMove["strategy"]["y_operation"]
+        next_direction = nextMove["strategy"]["direction"]
+        self._rotate_operation(next_direction) # shape direction operation
+        self._x_operation(next_x) # x operation
         removedlines, dropdownlines = self._y_operation(y_operation, next_y_moveblocknum)
-
         self.UpdateScore(removedlines, dropdownlines)
-
-        # check reset field
+        reward = removedlines + dropdownlines * 0.01
+        done = False
         if BOARD_DATA.currentY < 1:
             # if Piece cannot movedown and stack, reset field
-            print("reset field.")
+            #print("reset field.")
             self.resetfield()
-
-        # init nextMove
-        self.nextMove = None
-
-        # update window
-        self.updateWindow()
+            reward -= Game_Manager.GAMEOVER_SCORE
+            done = True
+        GameStatus = self.getGameStatus()
+        self.tboard.updateData()
+        self.sidePanel.updateData()
+        self.update()
+        QTest.qWait(10)
+        return GameStatus, reward, done
 
     def center(self):
         screen = QDesktopWidget().screenGeometry()
@@ -288,9 +273,11 @@ class Game_Manager(QMainWindow):
         # callback function for user control
 
         if event.timerId() == self.timer.timerId():
+            '''
             if self.train_mode == "y":
                 self.step()
                 return
+            '''
             next_x = 0
             next_y_moveblocknum = 0
             y_operation = -1
@@ -334,7 +321,7 @@ class Game_Manager(QMainWindow):
                 while BOARD_DATA.currentDirection != next_direction and k < 4:
                     ret = BOARD_DATA.rotateRight()
                     if ret == False:
-                        print("cannot rotateRight")
+                        #print("cannot rotateRight")
                         break
                     k += 1
                 # x operation
@@ -343,12 +330,12 @@ class Game_Manager(QMainWindow):
                     if BOARD_DATA.currentX > next_x:
                         ret = BOARD_DATA.moveLeft()
                         if ret == False:
-                            print("cannot moveLeft")
+                            #print("cannot moveLeft")
                             break
                     elif BOARD_DATA.currentX < next_x:
                         ret = BOARD_DATA.moveRight()
                         if ret == False:
-                            print("cannot moveRight")
+                            #print("cannot moveRight")
                             break
                     k += 1
 
@@ -374,7 +361,7 @@ class Game_Manager(QMainWindow):
             # check reset field
             if BOARD_DATA.currentY < 1:
                 # if Piece cannot movedown and stack, reset field
-                print("reset field.")
+                #print("reset field.")
                 self.resetfield()
 
             # init nextMove
@@ -693,15 +680,15 @@ def drawSquare(painter, x, y, val, s):
         return
 
     color = QColor(colorTable[val])
-    painter.fillRect(x + 1, y + 1, s - 2, s - 2, color)
+    painter.fillRect(int(x + 1), int(y + 1), int(s - 2), int(s - 2), color)
 
     painter.setPen(color.lighter())
-    painter.drawLine(x, y + s - 1, x, y)
-    painter.drawLine(x, y, x + s - 1, y)
+    painter.drawLine(int(x), int(y + s - 1), int(x), int(y))
+    painter.drawLine(int(x), int(y), int(x + s - 1), int(y))
 
     painter.setPen(color.darker())
-    painter.drawLine(x + 1, y + s - 1, x + s - 1, y + s - 1)
-    painter.drawLine(x + s - 1, y + s - 1, x + s - 1, y + 1)
+    painter.drawLine(int(x + 1), int(y + s - 1), int(x + s - 1), int(y + s - 1))
+    painter.drawLine(int(x + s - 1), int(y + s - 1), int(x + s - 1), int(y + 1))
 
 
 class SidePanel(QFrame):
