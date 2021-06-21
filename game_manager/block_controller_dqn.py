@@ -292,7 +292,7 @@ class DeepQNetworkAgent():
         best_actions = torch.argmax(next_state_Q, axis=1)
         tgt = self.target_model(next_states)
         next_Q = tgt[np.arange(0, self.batch_size), best_actions]
-        return (rewards + (1-dones) * gamma * next_Q)
+        return (rewards + (1.0-dones) * gamma * next_Q)
 
     def act(self, state, epsilon):
         if np.random.rand() < epsilon:
@@ -335,7 +335,15 @@ def get_next_move(action):
     x = action // 4
     y_operation = 1
     y_moveblocknum = np.random.randint(1,8)
-    return direction, x, y_operation, y_moveblocknum
+    nextMove = {"strategy":
+                    {
+                        "direction": direction,
+                        "x": x,
+                        "y_operation": y_operation,
+                        "y_moveblocknum": y_moveblocknum,
+                    },
+                }
+    return nextMove
 
 class DeepQNetworkTrainer():
     def __init__(self):
@@ -362,7 +370,7 @@ class DeepQNetworkTrainer():
             return line_reward
 
     def train(self, env, episode_cnt=1000, min_epsilon=0.1, epsilon_decay_rate=0.99, gamma=0.6):
-        self.agent = DeepQNetworkAgent()
+        self.agent = DeepQNetworkAgent(lr=0.00025)
         iter = 0
         for episode in tqdm(range(episode_cnt)):
             GameStatus = env.reset()
@@ -371,19 +379,11 @@ class DeepQNetworkTrainer():
             done = False
             while not done:
                 action = self.agent.act(state, self.epsilon)
+                nextMove = get_next_move(action)
                 prev_state = state
-                direction, x, y_operation, y_moveblocknum = get_next_move(action)
-                nextMove = {"strategy":
-                                {
-                                    "direction": direction,
-                                    "x": x,
-                                    "y_operation": y_operation,
-                                    "y_moveblocknum": y_moveblocknum,
-                                },
-                            }
-                GameStatus, reward, done = env.step(nextMove)
-                state = get_state(GameStatus)
-                reward = self._custom_reward(GameStatus, done)
+                gameStatus, reward, done = env.step(nextMove)
+                state = get_state(gameStatus)
+                reward = self._custom_reward(gameStatus, done)
                 exp = {'s':prev_state, 'a':action, 'r':reward, 'n_s':state, 'done':done}
                 self.agent.add_experience(exp)
                 self.agent.update_online(gamma)
