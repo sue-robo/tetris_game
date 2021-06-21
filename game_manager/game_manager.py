@@ -139,7 +139,7 @@ class Game_Manager(QMainWindow):
             BOARD_DATA.clear()
             BOARD_DATA.createNewPiece()
             self.tboard.msg2Statusbar.emit(str(self.tboard.score))
-            DQN_TRAINER.train(self, episode_cnt=self.episode_cnt)
+            DQN_TRAINER.train(self, episode_cnt=self.episode_cnt, gamma=0.9)
             sys.exit(0)
         else:
             self.timer = QBasicTimer()
@@ -259,24 +259,17 @@ class Game_Manager(QMainWindow):
         BOARD_DATA.createNewPiece()
 
     def updateWindow(self):
-        done = self.tboard.updateData()
-        if not done:
-            self.sidePanel.updateData()
-            self.update()
-        else:
-            BLOCK_CONTROLLER.callback_on_exit()
+        f = self.tboard.updateData()
+        if f:
             sys.exit(0)
-        return done
+        self.sidePanel.updateData()
+        self.update()
+
 
     def timerEvent(self, event):
         # callback function for user control
 
         if event.timerId() == self.timer.timerId():
-            '''
-            if self.train_mode == "y":
-                self.step()
-                return
-            '''
             next_x = 0
             next_y_moveblocknum = 0
             y_operation = -1
