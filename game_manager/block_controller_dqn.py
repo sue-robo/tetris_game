@@ -3,18 +3,17 @@
 import numpy as np
 from datetime import datetime
 import pprint
-import random
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+from torch.nn.modules.activation import ReLU
 from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
 
-'''
-
+''' # change model
 def _get_peaks(board):
     res = np.array([])
     for c in range(board.shape[1]):
@@ -116,23 +115,18 @@ def get_state(GameStatus):
 class DeepQNetwork(nn.Module):
     def __init__(self, input, output):
         super(DeepQNetwork, self).__init__()
-        self.fc1 = nn.Linear(input, 512)
-        self.relu1 = nn.ReLU()
-        self.fc2 = nn.Linear(512, 128)
-        self.relu2 = nn.ReLU()
-        self.fc3 = nn.Linear(128, 64)
-        self.relu3 = nn.ReLU()
-        self.out = nn.Linear(64, output)
+        self.net = nn.Sequential(
+            nn.Linear(input, 512),
+            nn.ReLU(),
+            nn.Linear(512, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, output)
+        )
 
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.relu1(x)
-        x = self.fc2(x)
-        x = self.relu2(x)
-        x = self.fc3(x)
-        x = self.relu3(x)
-        x = self.out(x)
-        return x
+        return self.net(x)
 '''
 def get_state(GameStatus):
     height = GameStatus["field_info"]["height"]
@@ -187,33 +181,41 @@ def get_state(GameStatus):
 class DeepQNetwork(nn.Module):
     def __init__(self, output):
         super(DeepQNetwork, self).__init__()
-        self.conv1 = nn.Conv2d(1, 16, 5)
-        self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, 3)
-        self.bn2 = nn.BatchNorm2d(32)
-        self.fc1 = nn.Linear(2560, 1024)
-        self.fc2 = nn.Linear(1024, 256)
-        self.head = nn.Linear(256, output)
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 16, 3),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.Conv2d(16, 16, 3),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.Conv2d(16, 32, 3),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(2560, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 256),
+            nn.ReLU(),
+            nn.Linear(256, output)
+        )
+        print(self.net)
+
     
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = x.view(x.size()[0],-1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.head(x)
-        return x
+        return self.net(x)
 
 
 class DeepQNetworkAgent():
     def __init__(self, lr=1e-2):
-        self.board_h = 22
-        self.board_w = 10
-        self.block_h = 4
-        self.num_actions = 9*4 # range(x) * range(direction)
-        '''
-        self.model = DeepQNetwork(11, self.num_actions)
-        self.teacher_model = DeepQNetwork(11, self.num_actions)
+        #self.board_h = 22
+        #self.board_w = 10
+        #self.block_h = 4
+        self.num_direction = 4
+        self.num_x = 10
+        self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
+        ''' # change model
+        self.online_model = DeepQNetwork(11, self.num_actions)
+        self.target_model = DeepQNetwork(11, self.num_actions)
         '''
         self.online_model = DeepQNetwork(self.num_actions)
         self.target_model = DeepQNetwork(self.num_actions)
@@ -223,6 +225,8 @@ class DeepQNetworkAgent():
         self.max_experiences = 1000
         self.min_experiences = 100
         self.experience = {'s':[], 'a':[], 'r':[], 'n_s':[], 'done':[]}
+        self.batch_size = 32
+
         self.optimizer = optim.Adam(self.online_model.parameters(), lr=lr)
         self.criterion = nn.MSELoss()
 
@@ -237,60 +241,83 @@ class DeepQNetworkAgent():
         for key, value in exp.items():
             self.experience[key].append(value)
 
-    '''
-    def estimate(self, state):
-        return self.online_model(
-            torch.from_numpy(state).float()
-        )
-
-    def future(self, state):
-        return self.target_model(
-            torch.from_numpy(state).float()
-        )
-    '''
-    def estimate(self, state):
-        return self.online_model(
-            torch.from_numpy(state).view(-1, 1, self.board_w, self.board_h+self.block_h).float()
-        )
-
-    def future(self, state):
-        return self.target_model(
-            torch.from_numpy(state).view(-1, 1, self.board_w, self.board_h+self.block_h).float()
-        )
-
-    def policy(self, state, epsilon):
-        if random.random() < epsilon:
-            direction = random.randint(0,4)
-            x = random.randint(0,10)
-            action = x * 4 + direction
-        else:
-            prediction = self.estimate(state).detach().numpy()
-            action = np.argmax(prediction)
-        return action
-    
-    def update(self, gamma):
-        if len(self.experience['s']) < self.min_experiences:
-            return
-        ids = np.random.randint(low=0, high=len(self.experience['s']), size=32)
+    def recall(self):
+        ids = np.random.randint(low=0, high=len(self.experience['s']), size=self.batch_size)
         states = np.asarray([self.experience['s'][i] for i in ids])
         states_next = np.asarray([self.experience['n_s'][i] for i in ids])
-        estimateds = self.estimate(states).detach().numpy()
-        future = self.future(states_next).detach().numpy()
-        for idx, i in enumerate(ids):
-            reward = self.experience['r'][i]
-            done = self.experience['done'][i]
-            if not done:
-                future[idx] = reward + gamma * future[idx]
-        loss = self.criterion(torch.tensor(estimateds, requires_grad=True),
-                              torch.tensor(future, requires_grad=True))
-        self.writer.add_scalar("Loss/train", loss.item(), self.epoch)
+        actions = np.asarray([self.experience['a'][i] for i in ids])
+        rewards = np.asarray([self.experience['r'][i] for i in ids])
+        dones = np.asarray([self.experience['done'][i] for i in ids])
+        return states, states_next, actions, rewards, dones
+
+    ''' # change model
+    def estimate(self, state):
+        return self.online_model(
+            torch.from_numpy(state.astype(np.float32))
+        ).unsqueeze(0)
+
+    def td_estimate(self, states, actions):
+        est = self.online_model(torch.from_numpy(states.astype(np.float32)))
+        current_Q = est[np.arange(0, self.batch_size), actions]
+        return current_Q
+
+    @torch.no_grad()
+    def td_target(self, next_states, rewards, dones, gamma):
+        rewards = torch.from_numpy(rewards).float()
+        dones = torch.from_numpy(dones).float()
+        next_states = torch.from_numpy(next_states.astype(np.float32))
+        next_state_Q = self.online_model(next_states)
+        best_actions = torch.argmax(next_state_Q, axis=1)
+        tgt = self.target_model(next_states)
+        next_Q = tgt[np.arange(0, self.batch_size), best_actions]
+        return (rewards + (1-dones) * gamma * next_Q)
+
+    '''
+    def estimate(self, state):
+        return self.online_model(
+            torch.from_numpy(state.astype(np.float32)).unsqueeze(0).unsqueeze(1)
+        )
+
+    def td_estimate(self, states, actions):
+        est = self.online_model(torch.from_numpy(states.astype(np.float32)).unsqueeze(1))
+        current_Q = est[np.arange(0, self.batch_size), actions]
+        return current_Q
+
+    @torch.no_grad()
+    def td_target(self, next_states, rewards, dones, gamma):
+        rewards = torch.from_numpy(rewards).float()
+        dones = torch.from_numpy(dones).float()
+        next_states = torch.from_numpy(next_states.astype(np.float32)).unsqueeze(1)
+        next_state_Q = self.online_model(next_states)
+        best_actions = torch.argmax(next_state_Q, axis=1)
+        tgt = self.target_model(next_states)
+        next_Q = tgt[np.arange(0, self.batch_size), best_actions]
+        return (rewards + (1-dones) * gamma * next_Q)
+
+    def act(self, state, epsilon):
+        if np.random.rand() < epsilon:
+            direction = np.random.randint(0, self.num_direction)
+            x = np.random.randint(0, self.num_x)
+            action = x * self.num_direction + direction
+        else:
+            action_values = self.estimate(state)
+            action = torch.argmax(action_values, axis=1).item()
+        return action
+    
+    def update_online(self, gamma):
+        if len(self.experience['s']) < self.min_experiences:
+            return
+        states, next_states, actions, rewards, dones = self.recall()
+        td_est = self.td_estimate(states, actions)
+        td_tgt = self.td_target(next_states, rewards, dones, gamma)
+        loss = self.criterion(td_est, td_tgt)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-
+        self.writer.add_scalar("Loss/train", loss.item(), self.epoch)
         self.epoch += 1
 
-    def update_teacher(self):
+    def update_target(self):
         self.target_model.load_state_dict(self.online_model.state_dict())
 
     def save_network(self, online_model_path, target_model_path):
@@ -307,7 +334,7 @@ def get_next_move(action):
     direction = action % 4
     x = action // 4
     y_operation = 1
-    y_moveblocknum = random.randint(1,8)
+    y_moveblocknum = np.random.randint(1,8)
     return direction, x, y_operation, y_moveblocknum
 
 class DeepQNetworkTrainer():
@@ -325,14 +352,14 @@ class DeepQNetworkTrainer():
         for i in range(4):
             line_reward += (i+1)*(i+1) * (line_score_stat[i] - self.prev_line_score_stat[i])
             self.prev_line_score_stat[i] = line_score_stat[i]
-        gameover_penalty = (gameover_count - self.prev_gameover_count) * 5
+        gameover_penalty = (gameover_count - self.prev_gameover_count) * 100
         self.prev_gameover_count = gameover_count
 
         if done:
             #print(f'line_reward , gameover_penalty = {line_reward}, {gameover_penalty}')
             return line_reward - gameover_penalty
         else:
-            return 0
+            return line_reward
 
     def train(self, env, episode_cnt=1000, min_epsilon=0.1, epsilon_decay_rate=0.99, gamma=0.6):
         self.agent = DeepQNetworkAgent()
@@ -343,7 +370,7 @@ class DeepQNetworkTrainer():
             self.epsilon = max(min_epsilon, self.epsilon * epsilon_decay_rate)
             done = False
             while not done:
-                action = self.agent.policy(state, self.epsilon)
+                action = self.agent.act(state, self.epsilon)
                 prev_state = state
                 direction, x, y_operation, y_moveblocknum = get_next_move(action)
                 nextMove = {"strategy":
@@ -359,17 +386,19 @@ class DeepQNetworkTrainer():
                 reward = self._custom_reward(GameStatus, done)
                 exp = {'s':prev_state, 'a':action, 'r':reward, 'n_s':state, 'done':done}
                 self.agent.add_experience(exp)
-                self.agent.update(gamma)
+                self.agent.update_online(gamma)
                 iter += 1
                 if iter % 100 == 0:
-                    self.agent.update_teacher()
+                    self.agent.update_target()
                 #self.reward_log.append(reward)
         self.agent.save_network('dqn.prm', 'dqn_teacher.prm')
                 
 class Block_Controller(object):
     def __init__(self):
-        self.num_actions = 9*4
-        '''
+        self.num_direction = 4
+        self.num_x = 10
+        self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
+        ''' # change model
         self.model = DeepQNetwork(11, self.num_actions)
         '''
         self.model = DeepQNetwork(self.num_actions)
