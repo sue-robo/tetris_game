@@ -402,7 +402,6 @@ class Block_Controller(object):
         self.model = DeepQNetwork(11, self.num_actions)
         '''
         self.model = DeepQNetwork(self.num_actions)
-        self.epsilon = 0.00
         #self.model.load_state_dict(torch.load('dqn.prm'))
 
     def GetNextMove(self, nextMove, GameStatus):
@@ -416,13 +415,9 @@ class Block_Controller(object):
         state = get_state(GameStatus)
         
         action = np.argmax(self.model(
-            torch.from_numpy(state).view(-1, 1, state.shape[1], state.shape[0]).float()
+            torch.from_numpy(state).unsqueeze(1).float()
         ).detach().numpy())
-        direction, x, y_operation, y_moveblocknum = get_next_move(action)
-        nextMove["strategy"]["direction"] = direction
-        nextMove["strategy"]["x"] = x
-        nextMove["strategy"]["y_operation"] = y_operation
-        nextMove["strategy"]["y_moveblocknum"] = y_moveblocknum
+        nextMove = get_next_move(action)
 
         print("===", datetime.now() - t1)
         print(nextMove)
