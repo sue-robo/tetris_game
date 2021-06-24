@@ -139,7 +139,7 @@ class Game_Manager(QMainWindow):
             BOARD_DATA.clear()
             BOARD_DATA.createNewPiece()
             self.tboard.msg2Statusbar.emit(str(self.tboard.score))
-            DQN_TRAINER.train(self, episode_cnt=self.episode_cnt, gamma=0.9)
+            DQN_TRAINER.train(self, episode_cnt=self.episode_cnt)
             sys.exit(0)
         else:
             self.timer = QBasicTimer()
