@@ -3,17 +3,8 @@
 import numpy as np
 from datetime import datetime
 import pprint
+import copy
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-from torch.nn.modules.activation import ReLU
-from torch.utils.tensorboard import SummaryWriter
-
-from tqdm import tqdm
-
-''' # change model
 def _get_peaks(board):
     res = np.array([])
     for c in range(board.shape[1]):
@@ -77,13 +68,9 @@ def _get_wells(peaks):
             w = w1 if w1 >= w2 else w2
             wells.append(w)
     return wells
-def get_state(GameStatus):
-    height = GameStatus["field_info"]["height"]
-    width = GameStatus["field_info"]["width"]
-    block = GameStatus["block_info"]
-    board = np.array(GameStatus["field_info"]["backboard"]).reshape([height,width])
-    board = np.where(board != 0, 1, 0)
 
+def _get_board_features(board):
+    features = {}
     peaks = _get_peaks(board)
     highest_peak = np.max(peaks)
     aggregated_height = np.sum(peaks)
@@ -96,18 +83,169 @@ def get_state(GameStatus):
     n_pits = np.count_nonzero(np.count_nonzero(board, axis=0) == 0)
     wells = _get_wells(peaks)
     max_wells = np.max(wells)
+
+    features["sum_height"] = np.array(peaks).sum()
+    features["highest_peak"] = highest_peak
+    features["aggregated_height"] = aggregated_height
+    features["n_holes"] = n_holes
+    features["n_col_with_holes"] = n_col_with_holes
+    features["row_transitions"] = row_transitions
+    features["col_transitions"] = col_transitions
+    features["bumpiness"] = bumpiness
+    features["n_pits"] = n_pits
+    features["max_wells"] = max_wells
+    return features
+
+def _get_full_lines(board):
+    res = [0, 0, 0, 0, 0]
+    c = 0
+    for h in range(0,len(board)):
+        f = True
+        for w in range(0, len(board[h])):
+            if board[h,w] == 0:
+                f = False
+                break
+        if f:
+            c += 1
+        else:
+            res[c] += 1
+            c = 0
+    return res
+        
+
+class Block_Controller_Manual():
+    def __init__(self):
+        self.ShapeNone_index = None
+        self.board_width = 0
+
+    def get_act(self, GameStatus):
+        backboard = GameStatus["field_info"]["backboard"]
+        self.board_height = GameStatus["field_info"]["height"]
+        self.board_width = GameStatus["field_info"]["width"]
+        CurrentShapeClass = GameStatus["block_info"]["currentShape"]["class"]
+        CurrentShapeDirectionRange = GameStatus["block_info"]["currentShape"]["direction_range"]
+        self.ShapeNone_index = GameStatus["debug_info"]["shape_info"]["shapeNone"]["index"]
+
+        strategy = None
+        LatestEvalValue = -100000
+        for direction0 in CurrentShapeDirectionRange:
+            x0Min, x0Max = self.getSearchXRange(CurrentShapeClass, direction0, self.board_width)
+            for x0 in range(x0Min, x0Max):
+                board = self.getBoard(backboard, CurrentShapeClass, direction0, x0)
+                # evaluate board
+                EvalValue = self.calcEvaluationValueSample(board)
+                # update best move
+                if EvalValue > LatestEvalValue:
+                    strategy = {'direction':direction0, 'x':x0}
+                    LatestEvalValue = EvalValue
+        return strategy
+
+    def getSearchXRange(self, ShapeClass, direction, board_width):
+        #
+        # get x range from shape direction.
+        #
+        minX, maxX, _, _ = ShapeClass.getBoundingOffsets(direction) # get shape x offsets[minX,maxX] as relative value.
+        xMin = -1 * minX
+        xMax = board_width - maxX
+        return xMin, xMax
+
+    def getShapeCoordArray(self, ShapeClass, direction, x, y):
+        #
+        # get coordinate array by given shape.
+        #
+        coordArray = ShapeClass.getCoords(direction, x, y) # get array from shape direction, x, y.
+        return coordArray
+
+    def getBoard(self, backboard, Shape_class, direction, x):
+        # 
+        # get new board.
+        #
+        # copy backboard data to make new board.
+        # if not, original backboard data will be updated later.
+        board = copy.deepcopy(backboard)
+        _board = self.dropDown(board, Shape_class, direction, x)
+        return _board
+
+    def dropDown(self, board, Shape_class, direction, x):
+        # 
+        # internal function of getBoard.
+        # -- drop down the shape on the board.
+        # 
+        dy = self.board_height - 1
+        coordArray = self.getShapeCoordArray(Shape_class, direction, x, 0)
+        # update dy
+        for _x, _y in coordArray:
+            _yy = 0
+            while _yy + _y < self.board_height and (_yy + _y < 0 or board[(_y + _yy) * self.board_width + _x] == self.ShapeNone_index):
+                _yy += 1
+            _yy -= 1
+            if _yy < dy:
+                dy = _yy
+        # get new board
+        _board = self.dropDownWithDy(board, Shape_class, direction, x, dy)
+        return _board
+
+    def dropDownWithDy(self, board, Shape_class, direction, x, dy):
+        #
+        # internal function of dropDown.
+        #
+        _board = board
+        coordArray = self.getShapeCoordArray(Shape_class, direction, x, 0)
+        for _x, _y in coordArray:
+            _board[(_y + dy) * self.board_width + _x] = Shape_class.shape
+        return _board
+
+    def calcEvaluationValueSample(self, board):
+        flbonus = [0.0, 10.0, 20.0, 40.0, 60.0]
+
+        height = self.board_height
+        width = self.board_width
+        board = np.array(board).reshape((height,width))
+        board = np.where(board != 0, 1, 0)
+        features = _get_board_features(board)
+        fullLines = _get_full_lines(board)
+        fl = 0.0
+        for b, l in zip(flbonus, fullLines):
+            fl += b * l
+        score = 0.0
+        score = score + 1.0 * fl
+        #score = score - 1.0 * features["sum_height"]
+        score = score - 1.0 * features["highest_peak"]
+        score = score - 3.0 * features["n_holes"]
+        #score = score - 1.0 * features["n_col_with_holes"]
+        score = score - 0.5 * features["bumpiness"]
+        #score = score - 1.0 * features["max_wells"]
+        return score
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.nn.modules.activation import ReLU
+from torch.utils.tensorboard import SummaryWriter
+
+from tqdm import tqdm
+
+def get_state(GameStatus):
+    height = GameStatus["field_info"]["height"]
+    width = GameStatus["field_info"]["width"]
+    block = GameStatus["block_info"]
+    board = np.array(GameStatus["field_info"]["backboard"]).reshape([height,width])
+    board = np.where(board != 0, 1, 0)
+
+    features = _get_board_features(board)
     current_shape = block["currentShape"]["index"]
     next_shape = block["nextShape"]["index"]
     return np.array([
-                        highest_peak, \
-                        aggregated_height, \
-                        n_holes, \
-                        n_col_with_holes, \
-                        row_transitions, \
-                        col_transitions, \
-                        bumpiness, \
-                        n_pits, \
-                        max_wells, \
+                        features["highest_peak"], \
+                        features["aggregated_height"], \
+                        features["n_holes"], \
+                        features["n_col_with_holes"], \
+                        features["row_transitions"], \
+                        features["col_transitions"], \
+                        features["bumpiness"], \
+                        features["n_pits"], \
+                        features["max_wells"], \
                         current_shape, \
                         next_shape
                     ])
@@ -203,6 +341,7 @@ class DeepQNetwork(nn.Module):
     
     def forward(self, x):
         return self.net(x)
+''' # change model
 
 
 class DeepQNetworkAgent():
@@ -213,12 +352,12 @@ class DeepQNetworkAgent():
         self.num_direction = 4
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
-        ''' # change model
         self.online_model = DeepQNetwork(11, self.num_actions)
         self.target_model = DeepQNetwork(11, self.num_actions)
         '''
         self.online_model = DeepQNetwork(self.num_actions)
         self.target_model = DeepQNetwork(self.num_actions)
+        ''' # change model
         for p in self.target_model.parameters():
             p.requires_grad = False
 
@@ -250,7 +389,6 @@ class DeepQNetworkAgent():
         dones = np.asarray([self.experience['done'][i] for i in ids])
         return states, states_next, actions, rewards, dones
 
-    ''' # change model
     def estimate(self, state):
         return self.online_model(
             torch.from_numpy(state.astype(np.float32))
@@ -293,11 +431,16 @@ class DeepQNetworkAgent():
         tgt = self.target_model(next_states)
         next_Q = tgt[np.arange(0, self.batch_size), best_actions]
         return (rewards + (1.0-dones) * gamma * next_Q)
+    ''' # change model
 
-    def act(self, state, epsilon):
+    def act(self, state, epsilon, zehta=0.0, sample_strategy=None):
         if np.random.rand() < epsilon:
-            direction = np.random.randint(0, self.num_direction)
-            x = np.random.randint(0, self.num_x)
+            if np.random.rand() < zehta:
+                direction = sample_strategy['direction']
+                x = sample_strategy['x']
+            else:
+                direction = np.random.randint(0, self.num_direction)
+                x = np.random.randint(0, self.num_x)
             action = x * self.num_direction + direction
         else:
             action_values = self.estimate(state)
@@ -347,11 +490,20 @@ def get_next_move(action):
 
 class DeepQNetworkTrainer():
     def __init__(self):
-        self.epsilon = 0.9
+        self.gamma = 0.6
+        self.epsilon = 0.99
+        self.min_epsilon = 0.1
+        self.epsilon_decay_rate = 0.999
+        self.zehta = 0.99
+        self.min_zehta = 0.7
+        self.zehta_decay_rate = 0.999
+
+
         self.agent = None
         self.reward_log = []
         self.prev_line_score_stat = [0, 0, 0, 0]
         self.prev_gameover_count = 0
+        self.block_controller_sample = Block_Controller_Manual()
 
     def _custom_reward(self, GameStatus, done):
         line_score_stat = GameStatus["debug_info"]["line_score_stat"]
@@ -369,16 +521,18 @@ class DeepQNetworkTrainer():
         else:
             return line_reward
 
-    def train(self, env, episode_cnt=1000, min_epsilon=0.1, epsilon_decay_rate=0.99, gamma=0.6):
+    def train(self, env, episode_cnt=1000):
         self.agent = DeepQNetworkAgent(lr=0.00025)
         iter = 0
         for episode in tqdm(range(episode_cnt)):
-            GameStatus = env.reset()
-            state = get_state(GameStatus)
-            self.epsilon = max(min_epsilon, self.epsilon * epsilon_decay_rate)
+            gameStatus = env.reset()
+            state = get_state(gameStatus)
+            self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay_rate)
+            self.zehta = max(self.min_zehta, self.zehta * self.zehta_decay_rate)
             done = False
             while not done:
-                action = self.agent.act(state, self.epsilon)
+                sample_strategy = self.block_controller_sample.get_act(gameStatus)
+                action = self.agent.act(state, self.epsilon, self.zehta, sample_strategy)
                 nextMove = get_next_move(action)
                 prev_state = state
                 gameStatus, reward, done = env.step(nextMove)
@@ -386,7 +540,7 @@ class DeepQNetworkTrainer():
                 reward = self._custom_reward(gameStatus, done)
                 exp = {'s':prev_state, 'a':action, 'r':reward, 'n_s':state, 'done':done}
                 self.agent.add_experience(exp)
-                self.agent.update_online(gamma)
+                self.agent.update_online(self.gamma)
                 iter += 1
                 if iter % 100 == 0:
                     self.agent.update_target()
@@ -398,10 +552,10 @@ class Block_Controller(object):
         self.num_direction = 4
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
-        ''' # change model
         self.model = DeepQNetwork(11, self.num_actions)
         '''
         self.model = DeepQNetwork(self.num_actions)
+        ''' # change model
         #self.model.load_state_dict(torch.load('dqn.prm'))
 
     def GetNextMove(self, nextMove, GameStatus):
