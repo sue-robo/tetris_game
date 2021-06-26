@@ -69,6 +69,13 @@ def _get_wells(peaks):
             wells.append(w)
     return wells
 
+def _get_board(GameStatus):
+    height = GameStatus["field_info"]["height"]
+    width = GameStatus["field_info"]["width"]
+    board = np.array(GameStatus["field_info"]["backboard"]).reshape([height,width])
+    board = np.where(board != 0, 1, 0)
+    return board
+
 def _get_board_features(board):
     features = {}
     peaks = _get_peaks(board)
@@ -226,12 +233,14 @@ from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
 
+''' # change model
 def get_state(GameStatus):
-    height = GameStatus["field_info"]["height"]
-    width = GameStatus["field_info"]["width"]
+    #height = GameStatus["field_info"]["height"]
+    #width = GameStatus["field_info"]["width"]
+    #board = np.array(GameStatus["field_info"]["backboard"]).reshape([height,width])
+    #board = np.where(board != 0, 1, 0)
+    board = _get_board(GameStatus)
     block = GameStatus["block_info"]
-    board = np.array(GameStatus["field_info"]["backboard"]).reshape([height,width])
-    board = np.where(board != 0, 1, 0)
 
     features = _get_board_features(board)
     current_shape = block["currentShape"]["index"]
@@ -341,23 +350,22 @@ class DeepQNetwork(nn.Module):
     
     def forward(self, x):
         return self.net(x)
-''' # change model
 
 
 class DeepQNetworkAgent():
-    def __init__(self, lr=1e-2):
+    def __init__(self, lr=1e-2, writer=None):
         #self.board_h = 22
         #self.board_w = 10
         #self.block_h = 4
         self.num_direction = 4
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
+        ''' # change model
         self.online_model = DeepQNetwork(11, self.num_actions)
         self.target_model = DeepQNetwork(11, self.num_actions)
         '''
         self.online_model = DeepQNetwork(self.num_actions)
         self.target_model = DeepQNetwork(self.num_actions)
-        ''' # change model
         for p in self.target_model.parameters():
             p.requires_grad = False
 
@@ -370,7 +378,10 @@ class DeepQNetworkAgent():
         self.criterion = nn.MSELoss()
 
         self.epoch = 0
-        self.writer = SummaryWriter()
+        self.writer = writer
+        self.n_strategy = 0
+        self.n_random = 0
+        self.n_network = 0
 
 
     def add_experience(self, exp):
@@ -389,6 +400,7 @@ class DeepQNetworkAgent():
         dones = np.asarray([self.experience['done'][i] for i in ids])
         return states, states_next, actions, rewards, dones
 
+    ''' # change model
     def estimate(self, state):
         return self.online_model(
             torch.from_numpy(state.astype(np.float32))
@@ -431,20 +443,29 @@ class DeepQNetworkAgent():
         tgt = self.target_model(next_states)
         next_Q = tgt[np.arange(0, self.batch_size), best_actions]
         return (rewards + (1.0-dones) * gamma * next_Q)
-    ''' # change model
 
     def act(self, state, epsilon, zehta=0.0, sample_strategy=None):
         if np.random.rand() < epsilon:
             if np.random.rand() < zehta:
                 direction = sample_strategy['direction']
                 x = sample_strategy['x']
+                self.n_strategy += 1
             else:
                 direction = np.random.randint(0, self.num_direction)
                 x = np.random.randint(0, self.num_x)
+                self.n_random += 1
             action = x * self.num_direction + direction
+            self.use_net = False
         else:
             action_values = self.estimate(state)
             action = torch.argmax(action_values, axis=1).item()
+            self.use_net = True
+            self.n_network += 1
+        tot = self.n_strategy + self.n_random + self.n_network
+        self.writer.flush()
+        self.writer.add_scalar("strategy rate", self.n_strategy/tot, tot)
+        self.writer.add_scalar("random rate", self.n_random/tot, tot)
+        self.writer.add_scalar("network rate", self.n_network/tot, tot)
         return action
     
     def update_online(self, gamma):
@@ -457,14 +478,15 @@ class DeepQNetworkAgent():
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        self.writer.add_scalar("Loss/train", loss.item(), self.epoch)
-        self.epoch += 1
+        if self.use_net:
+            self.writer.flush()
+            self.writer.add_scalar("Loss/train", loss.item(), self.epoch)
+            self.epoch += 1
 
     def update_target(self):
         self.target_model.load_state_dict(self.online_model.state_dict())
 
     def save_network(self, online_model_path, target_model_path):
-        self.writer.flush()
         torch.save(self.online_model.state_dict(), online_model_path)
         torch.save(self.target_model.state_dict(), target_model_path)
 
@@ -491,13 +513,12 @@ def get_next_move(action):
 class DeepQNetworkTrainer():
     def __init__(self):
         self.gamma = 0.6
-        self.epsilon = 0.99
+        self.epsilon = 1.00
         self.min_epsilon = 0.1
-        self.epsilon_decay_rate = 0.999
+        self.epsilon_decay_rate = 0.9999
         self.zehta = 0.99
         self.min_zehta = 0.7
-        self.zehta_decay_rate = 0.999
-
+        self.zehta_decay_rate = 0.9999
 
         self.agent = None
         self.reward_log = []
@@ -505,57 +526,72 @@ class DeepQNetworkTrainer():
         self.prev_gameover_count = 0
         self.block_controller_sample = Block_Controller_Manual()
 
-    def _custom_reward(self, GameStatus, done):
+        self.writer = SummaryWriter()
+
+        self.GAMEOVER_PENALTY = 100.0
+        self.LINE_REWARDS = [2.0, 4.0, 10.0, 20.0]
+
+    def _custom_reward(self, GameStatus, done, inner_iter):
+        reward = 0.0
         line_score_stat = GameStatus["debug_info"]["line_score_stat"]
         gameover_count = GameStatus["judge_info"]["gameover_count"]
+        board = _get_board(GameStatus)
+        features = _get_board_features(board)
         line_reward = 0
-        for i in range(4):
-            line_reward += (i+1)*(i+1) * (line_score_stat[i] - self.prev_line_score_stat[i])
+        z = zip(self.LINE_REWARDS, line_score_stat, self.prev_line_score_stat)
+        for i, (lr, ls, pls) in enumerate(z):
+            line_reward += lr * (ls - pls)
             self.prev_line_score_stat[i] = line_score_stat[i]
-        gameover_penalty = (gameover_count - self.prev_gameover_count) * 100
-        self.prev_gameover_count = gameover_count
 
+        reward += line_reward
+        reward -= 1.0 * features["highest_peak"]
+        reward -= 1.0 * features["n_holes"]
+        reward -= 1.0 * features["n_col_with_holes"]
+        reward -= 1.0 * features["bumpiness"]
+        reward -= 1.0 * features["max_wells"]
+        reward += 0.5 * inner_iter
         if done:
-            #print(f'line_reward , gameover_penalty = {line_reward}, {gameover_penalty}')
-            return line_reward - gameover_penalty
-        else:
-            return line_reward
+            reward -= self.GAMEOVER_PENALTY
+            self.prev_gameover_count = gameover_count
+
+        return reward
 
     def train(self, env, episode_cnt=1000):
-        self.agent = DeepQNetworkAgent(lr=0.00025)
+        self.agent = DeepQNetworkAgent(lr=0.00025, writer=self.writer)
         iter = 0
         for episode in tqdm(range(episode_cnt)):
             gameStatus = env.reset()
             state = get_state(gameStatus)
             self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay_rate)
             self.zehta = max(self.min_zehta, self.zehta * self.zehta_decay_rate)
-            done = False
-            while not done:
+            inner_iter, done = 0, False
+            while not done and inner_iter < 180:
+                iter, inner_iter = iter + 1, inner_iter + 1
                 sample_strategy = self.block_controller_sample.get_act(gameStatus)
                 action = self.agent.act(state, self.epsilon, self.zehta, sample_strategy)
                 nextMove = get_next_move(action)
                 prev_state = state
                 gameStatus, reward, done = env.step(nextMove)
                 state = get_state(gameStatus)
-                reward = self._custom_reward(gameStatus, done)
+                reward = self._custom_reward(gameStatus, done, inner_iter)
                 exp = {'s':prev_state, 'a':action, 'r':reward, 'n_s':state, 'done':done}
                 self.agent.add_experience(exp)
                 self.agent.update_online(self.gamma)
-                iter += 1
                 if iter % 100 == 0:
                     self.agent.update_target()
-                #self.reward_log.append(reward)
-        self.agent.save_network('dqn.prm', 'dqn_teacher.prm')
+                self.writer.flush()
+                self.writer.add_scalar("Reward", reward, iter)
+            self.agent.save_network('dqn.prm', 'dqn_teacher.prm')
                 
 class Block_Controller(object):
     def __init__(self):
         self.num_direction = 4
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
+        ''' # change model
         self.model = DeepQNetwork(11, self.num_actions)
         '''
         self.model = DeepQNetwork(self.num_actions)
-        ''' # change model
         #self.model.load_state_dict(torch.load('dqn.prm'))
 
     def GetNextMove(self, nextMove, GameStatus):
