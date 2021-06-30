@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime
 import pprint
 import copy
+from functools import reduce
 
 def _get_peaks(board):
     res = np.array([])
@@ -80,7 +81,11 @@ def _get_board_features(board):
     features = {}
     peaks = _get_peaks(board)
     highest_peak = np.max(peaks)
-    aggregated_height = np.sum(peaks)
+    aggregated_height = np.array(peaks).sum()
+    average_height = aggregated_height / board.shape[1]
+    n_high_peaks = reduce(lambda r, x: r + 1 if x > 4 else 0, map(lambda x: x-average_height,peaks))
+    #n_high_peaks = np.count_nonzero((map(lambda x: x-average_height, np.array(peaks))) > 4)
+
     holes = _get_holes(peaks, board)
     n_holes = np.sum(holes)
     n_col_with_holes = np.count_nonzero(np.array(holes)>0)
@@ -91,9 +96,10 @@ def _get_board_features(board):
     wells = _get_wells(peaks)
     max_wells = np.max(wells)
 
-    features["sum_height"] = np.array(peaks).sum()
     features["highest_peak"] = highest_peak
     features["aggregated_height"] = aggregated_height
+    features["average_height"] = average_height
+    features["n_high_peaks"] = n_high_peaks
     features["n_holes"] = n_holes
     features["n_col_with_holes"] = n_col_with_holes
     features["row_transitions"] = row_transitions
@@ -117,7 +123,7 @@ def _get_full_lines(board):
         else:
             res[c] += 1
             c = 0
-    return res
+    return res[1:]
         
 
 class Block_Controller_Manual():
@@ -203,7 +209,7 @@ class Block_Controller_Manual():
         return _board
 
     def calcEvaluationValueSample(self, board):
-        flbonus = [0.0, 10.0, 20.0, 40.0, 60.0]
+        flbonus = [10.0, 20.0, 50.0, 100.0]
 
         height = self.board_height
         width = self.board_width
@@ -217,11 +223,13 @@ class Block_Controller_Manual():
         score = 0.0
         score = score + 1.0 * fl
         #score = score - 1.0 * features["sum_height"]
-        score = score - 1.0 * features["highest_peak"]
-        score = score - 3.0 * features["n_holes"]
+        score = score - 3.0 * features["n_high_peaks"]
+        score = score - 5.0 * features["n_holes"]
         #score = score - 1.0 * features["n_col_with_holes"]
         score = score - 0.5 * features["bumpiness"]
         #score = score - 1.0 * features["max_wells"]
+        score = score - 1.0 * features["row_transitions"]
+        score = score - 2.0 * (features["col_transitions"] - 10)
         return score
 
 import torch
@@ -263,11 +271,11 @@ class DeepQNetwork(nn.Module):
     def __init__(self, input, output):
         super(DeepQNetwork, self).__init__()
         self.net = nn.Sequential(
-            nn.Linear(input, 512),
+            nn.Linear(input, 32),
             nn.ReLU(),
-            nn.Linear(512, 128),
+            nn.Linear(32, 64),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(64, 64),
             nn.ReLU(),
             nn.Linear(64, output)
         )
@@ -279,50 +287,54 @@ def get_state(GameStatus):
     height = GameStatus["field_info"]["height"]
     width = GameStatus["field_info"]["width"]
     block = GameStatus["block_info"]
-    board = np.array(GameStatus["field_info"]["withblock"]).reshape([height,width])
+    board = np.array(GameStatus["field_info"]["backboard"]).reshape([height,width])
     board = np.where(board != 0, 1, 0)
-    if block["nextShape"]["index"] == 1:
-        state = [0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 2, 0, 0, 0, 0]
-    elif block["nextShape"]["index"] == 2:
-        state = [0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 2, 2, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    elif block["nextShape"]["index"] == 3:
-        state = [0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 2, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    elif block["nextShape"]["index"] == 4:
-        state = [0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 2, 2, 0, 0, 0,
-                    0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    elif block["nextShape"]["index"] == 5:
-        state = [0, 0, 0, 0, 0, 2, 2, 0, 0, 0,
-                    0, 0, 0, 0, 0, 2, 2, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    elif block["nextShape"]["index"] == 6:
-        state = [0, 0, 0, 0, 0, 2, 2, 0, 0, 0,
-                    0, 0, 0, 0, 2, 2, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    elif block["nextShape"]["index"] == 7:
-        state = [0, 0, 0, 0, 0, 2, 2, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 2, 2, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    else:
-        state = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    state = np.array(state).reshape(4, 10)
-    state = np.vstack((state, board))
+    def get_block(index, n):
+        if index == 1:
+            p = [0, 0, 0, 0, 0, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, n, 0, 0, 0, 0]
+        elif index == 2:
+            p = [0, 0, 0, 0, 0, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, n, n, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        elif index == 3:
+            p = [0, 0, 0, 0, 0, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, n, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        elif index == 4:
+            p = [0, 0, 0, 0, 0, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, n, n, 0, 0, 0,
+                 0, 0, 0, 0, 0, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        elif index == 5:
+            p = [0, 0, 0, 0, 0, n, n, 0, 0, 0,
+                 0, 0, 0, 0, 0, n, n, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        elif index == 6:
+            p = [0, 0, 0, 0, 0, n, n, 0, 0, 0,
+                 0, 0, 0, 0, n, n, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        elif index == 7:
+            p = [0, 0, 0, 0, 0, n, n, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, n, n, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        else:
+            p = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        return np.array(p).reshape(4, width)
+
+    cur_block = get_block(block["currentShape"]["index"], 2)
+    nxt_block = get_block(block["nextShape"]["index"], 3)
+    state = np.vstack((nxt_block, cur_block, board))
     return state
 
 class DeepQNetwork(nn.Module):
@@ -332,14 +344,14 @@ class DeepQNetwork(nn.Module):
             nn.Conv2d(1, 16, 3),
             nn.BatchNorm2d(16),
             nn.ReLU(),
-            nn.Conv2d(16, 16, 3),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
             nn.Conv2d(16, 32, 3),
             nn.BatchNorm2d(32),
             nn.ReLU(),
+            nn.Conv2d(32, 32, 3),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(2560, 1024),
+            nn.Linear(3072, 1024),
             nn.ReLU(),
             nn.Linear(1024, 256),
             nn.ReLU(),
@@ -366,16 +378,24 @@ class DeepQNetworkAgent():
         '''
         self.online_model = DeepQNetwork(self.num_actions)
         self.target_model = DeepQNetwork(self.num_actions)
+        
+        ''' if use existing network model, activate following two lines
+        self.online_model.load_state_dict(torch.load('./dqn.prm'))
+        self.target_model.load_state_dict(torch.load('./dqn_teacher.prm'))
+        '''
         for p in self.target_model.parameters():
             p.requires_grad = False
+        self.target_model.eval()
 
         self.max_experiences = 1000
         self.min_experiences = 100
         self.experience = {'s':[], 'a':[], 'r':[], 'n_s':[], 'done':[]}
         self.batch_size = 32
 
-        self.optimizer = optim.Adam(self.online_model.parameters(), lr=lr)
-        self.criterion = nn.MSELoss()
+        #self.optimizer = optim.Adam(self.online_model.parameters(), lr=lr)
+        #self.criterion = nn.MSELoss()
+        self.optimizer = optim.AdamW(self.online_model.parameters(), lr=lr, )
+        self.criterion = nn.SmoothL1Loss()
 
         self.epoch = 0
         self.writer = writer
@@ -457,6 +477,7 @@ class DeepQNetworkAgent():
             action = x * self.num_direction + direction
             self.use_net = False
         else:
+            self.online_model.eval()
             action_values = self.estimate(state)
             action = torch.argmax(action_values, axis=1).item()
             self.use_net = True
@@ -472,6 +493,7 @@ class DeepQNetworkAgent():
         if len(self.experience['s']) < self.min_experiences:
             return
         states, next_states, actions, rewards, dones = self.recall()
+        self.online_model.train()
         td_est = self.td_estimate(states, actions)
         td_tgt = self.td_target(next_states, rewards, dones, gamma)
         loss = self.criterion(td_est, td_tgt)
@@ -520,6 +542,8 @@ class DeepQNetworkTrainer():
         self.min_zehta = 0.7
         self.zehta_decay_rate = 0.9999
 
+        self.TARGET_UPDATE = 10
+
         self.agent = None
         self.reward_log = []
         self.prev_line_score_stat = [0, 0, 0, 0]
@@ -528,8 +552,10 @@ class DeepQNetworkTrainer():
 
         self.writer = SummaryWriter()
 
-        self.GAMEOVER_PENALTY = 100.0
-        self.LINE_REWARDS = [2.0, 4.0, 10.0, 20.0]
+        self.ALMOST4LINES_BONUS = 20.0
+        self.GAMEOVER_PENALTY = 500.0
+        self.GAMECOMPLETE_BONUS = 100.0
+        self.LINE_REWARDS = [10.0, 20.0, 50.0, 100.0]
 
     def _custom_reward(self, GameStatus, done, inner_iter):
         reward = 0.0
@@ -544,15 +570,30 @@ class DeepQNetworkTrainer():
             self.prev_line_score_stat[i] = line_score_stat[i]
 
         reward += line_reward
-        reward -= 1.0 * features["highest_peak"]
-        reward -= 1.0 * features["n_holes"]
-        reward -= 1.0 * features["n_col_with_holes"]
-        reward -= 1.0 * features["bumpiness"]
-        reward -= 1.0 * features["max_wells"]
-        reward += 0.5 * inner_iter
+        reward -= 3.0 * features["n_high_peaks"]
+        reward -= 3.0 * features["n_holes"]
+        reward -= 0.5 * features["bumpiness"]
+        reward -= 1.0 * features["row_transitions"]
+        reward -= 1.0 * (features["col_transitions"] - 10)
+        reward += 0.1 * inner_iter
+
+        def almost4lines():
+            res = features["n_pits"] == 1
+            res = res and features["max_wells"] >= 4
+            res = res and features["average_height"] >= 4
+            res = res and features["n_high_peaks"] == 0
+            res = res and features["n_col_with_holes"] == 0
+            return res
+
+        if almost4lines():
+            #print("ALMOST 4 LINES")
+            reward += self.ALMOST4LINES_BONUS
         if done:
             reward -= self.GAMEOVER_PENALTY
             self.prev_gameover_count = gameover_count
+        if inner_iter >= 178:
+            #print("get GAMECOMPETE_BONUS")
+            reward += self.GAMECOMPLETE_BONUS
 
         return reward
 
@@ -577,7 +618,7 @@ class DeepQNetworkTrainer():
                 exp = {'s':prev_state, 'a':action, 'r':reward, 'n_s':state, 'done':done}
                 self.agent.add_experience(exp)
                 self.agent.update_online(self.gamma)
-                if iter % 100 == 0:
+                if iter % self.TARGET_UPDATE == 0:
                     self.agent.update_target()
                 self.writer.flush()
                 self.writer.add_scalar("Reward", reward, iter)
