@@ -84,7 +84,6 @@ def _get_board_features(board):
     aggregated_height = np.array(peaks).sum()
     average_height = aggregated_height / board.shape[1]
     n_high_peaks = reduce(lambda r, x: r + 1 if x > 4 else 0, map(lambda x: x-average_height,peaks))
-    #n_high_peaks = np.count_nonzero((map(lambda x: x-average_height, np.array(peaks))) > 4)
 
     holes = _get_holes(peaks, board)
     n_holes = np.sum(holes)
@@ -95,6 +94,7 @@ def _get_board_features(board):
     n_pits = np.count_nonzero(np.count_nonzero(board, axis=0) == 0)
     wells = _get_wells(peaks)
     max_wells = np.max(wells)
+    max_wells_inner = np.max(wells[:len(wells)-1])
 
     features["highest_peak"] = highest_peak
     features["aggregated_height"] = aggregated_height
@@ -107,24 +107,19 @@ def _get_board_features(board):
     features["bumpiness"] = bumpiness
     features["n_pits"] = n_pits
     features["max_wells"] = max_wells
+    features["max_wells_inner"] = max_wells_inner
     return features
 
 def _get_full_lines(board):
     res = [0, 0, 0, 0, 0]
     c = 0
     for h in range(0,len(board)):
-        f = True
-        for w in range(0, len(board[h])):
-            if board[h,w] == 0:
-                f = False
-                break
-        if f:
+        if all([ x != 0 for x in board[h,:]]):
             c += 1
         else:
             res[c] += 1
             c = 0
     return res[1:]
-        
 
 class Block_Controller_Manual():
     def __init__(self):
@@ -222,14 +217,13 @@ class Block_Controller_Manual():
             fl += b * l
         score = 0.0
         score = score + 1.0 * fl
-        #score = score - 1.0 * features["sum_height"]
-        score = score - 3.0 * features["n_high_peaks"]
+        score = score - 5.0 * features["n_high_peaks"]
         score = score - 5.0 * features["n_holes"]
-        #score = score - 1.0 * features["n_col_with_holes"]
+        score = score - 10.0 * features["n_col_with_holes"]
         score = score - 0.5 * features["bumpiness"]
-        #score = score - 1.0 * features["max_wells"]
         score = score - 1.0 * features["row_transitions"]
         score = score - 2.0 * (features["col_transitions"] - 10)
+        score = score - 5.0 if features["max_wells_inner"] >= 3 else score
         return score
 
 import torch
@@ -387,10 +381,10 @@ class DeepQNetworkAgent():
             p.requires_grad = False
         self.target_model.eval()
 
-        self.max_experiences = 1000
-        self.min_experiences = 100
+        self.max_experiences = 5000
+        self.min_experiences = 500
         self.experience = {'s':[], 'a':[], 'r':[], 'n_s':[], 'done':[]}
-        self.batch_size = 32
+        self.batch_size = 100
 
         #self.optimizer = optim.Adam(self.online_model.parameters(), lr=lr)
         #self.criterion = nn.MSELoss()
@@ -537,10 +531,10 @@ class DeepQNetworkTrainer():
         self.gamma = 0.6
         self.epsilon = 1.00
         self.min_epsilon = 0.1
-        self.epsilon_decay_rate = 0.9999
+        self.epsilon_decay_rate = 0.999
         self.zehta = 0.99
         self.min_zehta = 0.7
-        self.zehta_decay_rate = 0.9999
+        self.zehta_decay_rate = 0.999
 
         self.TARGET_UPDATE = 10
 
@@ -550,6 +544,7 @@ class DeepQNetworkTrainer():
         self.prev_gameover_count = 0
         self.block_controller_sample = Block_Controller_Manual()
 
+        self.iter = 0
         self.writer = SummaryWriter()
 
         self.ALMOST4LINES_BONUS = 20.0
@@ -569,13 +564,16 @@ class DeepQNetworkTrainer():
             line_reward += lr * (ls - pls)
             self.prev_line_score_stat[i] = line_score_stat[i]
 
+        reward += 0.1 * inner_iter
         reward += line_reward
-        reward -= 3.0 * features["n_high_peaks"]
-        reward -= 3.0 * features["n_holes"]
+        reward -= 5.0 * features["n_high_peaks"]
+        reward -= 5.0 * features["n_holes"]
+        reward -= 10.0 * features["n_col_with_holes"]
         reward -= 0.5 * features["bumpiness"]
         reward -= 1.0 * features["row_transitions"]
-        reward -= 1.0 * (features["col_transitions"] - 10)
-        reward += 0.1 * inner_iter
+        reward -= 2.0 * (features["col_transitions"] - 10)
+        reward = reward - 5.0 if features["max_wells_inner"] >= 3 else reward
+
 
         def almost4lines():
             res = features["n_pits"] == 1
@@ -592,14 +590,19 @@ class DeepQNetworkTrainer():
             reward -= self.GAMEOVER_PENALTY
             self.prev_gameover_count = gameover_count
         if inner_iter >= 178:
-            #print("get GAMECOMPETE_BONUS")
+            #print("get GAMECOMPLETE_BONUS")
             reward += self.GAMECOMPLETE_BONUS
+
+        self.writer.flush()
+        self.writer.add_scalar("Reward", reward, self.iter)
+        self.writer.add_scalar("Hols", features["n_holes"], self.iter)
+        self.writer.add_scalar("High Peaks", features["n_high_peaks"], self.iter)
 
         return reward
 
     def train(self, env, episode_cnt=1000):
         self.agent = DeepQNetworkAgent(lr=0.00025, writer=self.writer)
-        iter = 0
+        self.iter = 0
         for episode in tqdm(range(episode_cnt)):
             gameStatus = env.reset()
             state = get_state(gameStatus)
@@ -607,33 +610,30 @@ class DeepQNetworkTrainer():
             self.zehta = max(self.min_zehta, self.zehta * self.zehta_decay_rate)
             inner_iter, done = 0, False
             while not done and inner_iter < 180:
-                iter, inner_iter = iter + 1, inner_iter + 1
+                self.iter, inner_iter = self.iter + 1, inner_iter + 1
                 sample_strategy = self.block_controller_sample.get_act(gameStatus)
                 action = self.agent.act(state, self.epsilon, self.zehta, sample_strategy)
                 nextMove = get_next_move(action)
-                prev_state = state
                 gameStatus, reward, done = env.step(nextMove)
-                state = get_state(gameStatus)
+                prev_state, state = state, get_state(gameStatus)
                 reward = self._custom_reward(gameStatus, done, inner_iter)
                 exp = {'s':prev_state, 'a':action, 'r':reward, 'n_s':state, 'done':done}
                 self.agent.add_experience(exp)
                 self.agent.update_online(self.gamma)
-                if iter % self.TARGET_UPDATE == 0:
+                if self.iter % self.TARGET_UPDATE == 0:
                     self.agent.update_target()
-                self.writer.flush()
-                self.writer.add_scalar("Reward", reward, iter)
             self.agent.save_network('dqn.prm', 'dqn_teacher.prm')
                 
 class Block_Controller(object):
     def __init__(self):
         self.num_direction = 4
         self.num_x = 10
-        self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
+        self.num_actions = self.num_x * self.num_direction
         ''' # change model
         self.model = DeepQNetwork(11, self.num_actions)
         '''
         self.model = DeepQNetwork(self.num_actions)
-        #self.model.load_state_dict(torch.load('dqn.prm'))
+        #self.model.load_state_dict(torch.load('./game_manager/dqn.prm'))
 
     def GetNextMove(self, nextMove, GameStatus):
         t1 = datetime.now()
@@ -642,12 +642,17 @@ class Block_Controller(object):
         print("=================================================>")
         pprint.pprint(GameStatus, width = 61, compact = True)
 
-        ##### add 
         state = get_state(GameStatus)
-        
-        action = np.argmax(self.model(
-            torch.from_numpy(state).unsqueeze(1).float()
-        ).detach().numpy())
+
+        ''' # change model
+        action_values = self.model(
+            torch.from_numpy(state.astype(np.float32))
+        ).unsqueeze(0)
+        '''        
+        action_values = self.model(
+            torch.from_numpy(state.astype(np.float32)).unsqueeze(0).unsqueeze(1)
+        )
+        action = torch.argmax(action_values, axis=1).item()
         nextMove = get_next_move(action)
 
         print("===", datetime.now() - t1)
