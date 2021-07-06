@@ -458,7 +458,7 @@ class DeepQNetworkAgent():
         next_Q = tgt[np.arange(0, self.batch_size), best_actions]
         return (rewards + (1.0-dones) * gamma * next_Q)
 
-    def act(self, state, epsilon, zehta=0.0, sample_strategy=None):
+    def act(self, state, epsilon, zehta=0.0, sample_strategy=None, xrange_tab=None):
         if np.random.rand() < epsilon:
             if np.random.rand() < zehta:
                 direction = sample_strategy['direction']
@@ -473,7 +473,19 @@ class DeepQNetworkAgent():
         else:
             self.online_model.eval()
             action_values = self.estimate(state)
-            action = torch.argmax(action_values, axis=1).item()
+            if xrange_tab is None:
+                action = torch.argmax(action_values, axis=1).item()
+            else:
+                av = action_values.squeeze().detach().numpy()
+                av = av.reshape([self.num_x, self.num_direction])
+                mv, md, mx = -np.Inf, -1, -1
+                for d in range(0, self.num_direction):
+                    xmin, xmax = xrange_tab[d]
+                    for x in range(xmin, xmax):
+                        v = av[x, d]
+                        if mv < v:
+                            mv, md, mx = v, d, x
+                action = mx * self.num_direction + md
             self.use_net = True
             self.n_network += 1
         tot = self.n_strategy + self.n_random + self.n_network
@@ -612,7 +624,12 @@ class DeepQNetworkTrainer():
             while not done and inner_iter < 180:
                 self.iter, inner_iter = self.iter + 1, inner_iter + 1
                 sample_strategy = self.block_controller_sample.get_act(gameStatus)
-                action = self.agent.act(state, self.epsilon, self.zehta, sample_strategy)
+                cs = gameStatus["block_info"]["currentShape"]["class"]
+                bw = gameStatus["field_info"]["width"]
+                xrange_tab = []
+                for d in range(0,4):
+                    xrange_tab.append(self.block_controller_sample.getSearchXRange(cs, d, bw))
+                action = self.agent.act(state, self.epsilon, self.zehta, sample_strategy, xrange_tab)
                 nextMove = get_next_move(action)
                 gameStatus, reward, done = env.step(nextMove)
                 prev_state, state = state, get_state(gameStatus)
