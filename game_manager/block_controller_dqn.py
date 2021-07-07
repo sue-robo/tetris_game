@@ -237,48 +237,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
 
-''' # change model
-def get_state(GameStatus):
-    #height = GameStatus["field_info"]["height"]
-    #width = GameStatus["field_info"]["width"]
-    #board = np.array(GameStatus["field_info"]["backboard"]).reshape([height,width])
-    #board = np.where(board != 0, 1, 0)
-    board = _get_board(GameStatus)
-    block = GameStatus["block_info"]
-
-    features = _get_board_features(board)
-    current_shape = block["currentShape"]["index"]
-    next_shape = block["nextShape"]["index"]
-    return np.array([
-                        features["highest_peak"], \
-                        features["aggregated_height"], \
-                        features["n_holes"], \
-                        features["n_col_with_holes"], \
-                        features["row_transitions"], \
-                        features["col_transitions"], \
-                        features["bumpiness"], \
-                        features["n_pits"], \
-                        features["max_wells"], \
-                        current_shape, \
-                        next_shape
-                    ])
-
-class DeepQNetwork(nn.Module):
-    def __init__(self, input, output):
-        super(DeepQNetwork, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input, 32),
-            nn.ReLU(),
-            nn.Linear(32, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU(),
-            nn.Linear(64, output)
-        )
-
-    def forward(self, x):
-        return self.net(x)
-'''
 def get_state(GameStatus):
     height = GameStatus["field_info"]["height"]
     width = GameStatus["field_info"]["width"]
@@ -368,10 +326,6 @@ class DeepQNetworkAgent():
         self.num_direction = 4
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
-        ''' # change model
-        self.online_model = DeepQNetwork(11, self.num_actions)
-        self.target_model = DeepQNetwork(11, self.num_actions)
-        '''
         self.online_model = DeepQNetwork(self.num_actions)
         self.target_model = DeepQNetwork(self.num_actions)
         
@@ -418,29 +372,6 @@ class DeepQNetworkAgent():
         dones = np.asarray([self.experience['done'][i] for i in ids])
         return states, states_next, actions, rewards, dones
 
-    ''' # change model
-    def estimate(self, state):
-        return self.online_model(
-            torch.from_numpy(state.astype(np.float32))
-        ).unsqueeze(0)
-
-    def td_estimate(self, states, actions):
-        est = self.online_model(torch.from_numpy(states.astype(np.float32)))
-        current_Q = est[np.arange(0, self.batch_size), actions]
-        return current_Q
-
-    @torch.no_grad()
-    def td_target(self, next_states, rewards, dones, gamma):
-        rewards = torch.from_numpy(rewards).float()
-        dones = torch.from_numpy(dones).float()
-        next_states = torch.from_numpy(next_states.astype(np.float32))
-        next_state_Q = self.online_model(next_states)
-        best_actions = torch.argmax(next_state_Q, axis=1)
-        tgt = self.target_model(next_states)
-        next_Q = tgt[np.arange(0, self.batch_size), best_actions]
-        return (rewards + (1-dones) * gamma * next_Q)
-
-    '''
     def estimate(self, state):
         return self.online_model(
             torch.from_numpy(state.astype(np.float32)).unsqueeze(0).unsqueeze(1)
@@ -654,11 +585,17 @@ class Block_Controller(object):
         self.num_direction = 4
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction
-        ''' # change model
-        self.model = DeepQNetwork(11, self.num_actions)
-        '''
         self.model = DeepQNetwork(self.num_actions)
         #self.model.load_state_dict(torch.load('./game_manager/dqn.prm'))
+
+    def getSearchXRange(self, ShapeClass, direction, board_width):
+        #
+        # get x range from shape direction.
+        #
+        minX, maxX, _, _ = ShapeClass.getBoundingOffsets(direction) # get shape x offsets[minX,maxX] as relative value.
+        xMin = -1 * minX
+        xMax = board_width - maxX
+        return xMin, xMax
 
     def GetNextMove(self, nextMove, GameStatus):
         t1 = datetime.now()
@@ -667,17 +604,27 @@ class Block_Controller(object):
         print("=================================================>")
         pprint.pprint(GameStatus, width = 61, compact = True)
 
+        cs = GameStatus["block_info"]["currentShape"]["class"]
+        bw = GameStatus["field_info"]["width"]
+        xrange_tab = []
+        for d in range(0,4):
+            xrange_tab.append(self.getSearchXRange(cs,d,bw))
+
         state = get_state(GameStatus)
 
-        ''' # change model
-        action_values = self.model(
-            torch.from_numpy(state.astype(np.float32))
-        ).unsqueeze(0)
-        '''        
         action_values = self.model(
             torch.from_numpy(state.astype(np.float32)).unsqueeze(0).unsqueeze(1)
         )
-        action = torch.argmax(action_values, axis=1).item()
+        av = action_values.squeeze().detach().numpy()
+        av = av.reshape([self.num_x, self.num_direction])
+        mv, md, mx = -np.Inf, -1, -1
+        for d in range(0, self.num_direction):
+            xmin, xmax = xrange_tab[d]
+            for x in range(xmin, xmax):
+                v = av[x, d]
+                if mv < v:
+                    mv, md, mx = v, d, x
+        action = mx * self.num_direction + md
         nextMove = get_next_move(action)
 
         print("===", datetime.now() - t1)
