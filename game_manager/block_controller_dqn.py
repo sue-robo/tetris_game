@@ -204,7 +204,7 @@ class Block_Controller_Manual():
         return _board
 
     def calcEvaluationValueSample(self, board):
-        flbonus = [10.0, 20.0, 50.0, 100.0]
+        flbonus = [10.0, 20.0, 50.0, 120.0]
 
         height = self.board_height
         width = self.board_width
@@ -569,7 +569,7 @@ class DeepQNetworkTrainer():
         self.ALMOST4LINES_BONUS = 20.0
         self.GAMEOVER_PENALTY = 500.0
         self.GAMECOMPLETE_BONUS = 100.0
-        self.LINE_REWARDS = [10.0, 20.0, 50.0, 100.0]
+        self.LINE_REWARDS = [10.0, 20.0, 50.0, 120.0]
 
     def _custom_reward(self, GameStatus, done, inner_iter):
         reward = 0.0
