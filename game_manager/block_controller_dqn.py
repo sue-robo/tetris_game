@@ -218,12 +218,14 @@ class Block_Controller_Manual():
         score = 0.0
         score = score + 1.0 * fl
         score = score - 5.0 * features["n_high_peaks"]
-        score = score - 5.0 * features["n_holes"]
+        score = score - 7.0 * features["n_holes"]
         score = score - 10.0 * features["n_col_with_holes"]
         score = score - 0.5 * features["bumpiness"]
         score = score - 1.0 * features["row_transitions"]
         score = score - 2.0 * (features["col_transitions"] - 10)
         score = score - 5.0 if features["max_wells_inner"] >= 3 else score
+        score = score - 10.0 if features["average_height"] > 14 else score
+        score = score - 10.0 if features["highest_peak"] > 18 else score
         return score
 
 import torch
@@ -359,7 +361,7 @@ class DeepQNetwork(nn.Module):
 
 
 class DeepQNetworkAgent():
-    def __init__(self, lr=1e-2, writer=None):
+    def __init__(self, lr=1.0e-2, writer=None):
         #self.board_h = 22
         #self.board_w = 10
         #self.block_h = 4
@@ -381,15 +383,17 @@ class DeepQNetworkAgent():
             p.requires_grad = False
         self.target_model.eval()
 
-        self.max_experiences = 5000
-        self.min_experiences = 500
+        self.max_experiences = 3000
+        self.min_experiences = 300
         self.experience = {'s':[], 'a':[], 'r':[], 'n_s':[], 'done':[]}
-        self.batch_size = 100
+        self.batch_size = 64
 
         #self.optimizer = optim.Adam(self.online_model.parameters(), lr=lr)
         #self.criterion = nn.MSELoss()
         self.optimizer = optim.AdamW(self.online_model.parameters(), lr=lr, )
-        self.criterion = nn.SmoothL1Loss()
+        self.criterion = nn.MSELoss()
+        self.scheduler1 = optim.lr_scheduler.ExponentialLR(self.optimizer, 0.9999)
+        self.scheduler2 = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100, eta_min=0.5*lr)
 
         self.epoch = 0
         self.writer = writer
@@ -506,11 +510,14 @@ class DeepQNetworkAgent():
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+        self.scheduler1.step()
+        self.scheduler2.step()
         if self.use_net:
             self.writer.flush()
             self.writer.add_scalar("Loss/train", loss.item(), self.epoch)
+            self.writer.add_scalar("learning rate", self.optimizer.param_groups[0]['lr'], self.epoch)
             self.epoch += 1
-
+    
     def update_target(self):
         self.target_model.load_state_dict(self.online_model.state_dict())
 
@@ -543,10 +550,10 @@ class DeepQNetworkTrainer():
         self.gamma = 0.6
         self.epsilon = 1.00
         self.min_epsilon = 0.1
-        self.epsilon_decay_rate = 0.999
+        self.epsilon_decay_rate = 0.9998
         self.zehta = 0.99
         self.min_zehta = 0.7
-        self.zehta_decay_rate = 0.999
+        self.zehta_decay_rate = 0.9998
 
         self.TARGET_UPDATE = 10
 
@@ -579,13 +586,14 @@ class DeepQNetworkTrainer():
         reward += 0.1 * inner_iter
         reward += line_reward
         reward -= 5.0 * features["n_high_peaks"]
-        reward -= 5.0 * features["n_holes"]
+        reward -= 7.0 * features["n_holes"]
         reward -= 10.0 * features["n_col_with_holes"]
         reward -= 0.5 * features["bumpiness"]
         reward -= 1.0 * features["row_transitions"]
         reward -= 2.0 * (features["col_transitions"] - 10)
         reward = reward - 5.0 if features["max_wells_inner"] >= 3 else reward
-
+        reward = reward - 10.0 if features["average_height"] > 14 else reward
+        reward = reward - 10.0 if features["highest_peak"] > 18 else reward
 
         def almost4lines():
             res = features["n_pits"] == 1
@@ -613,7 +621,7 @@ class DeepQNetworkTrainer():
         return reward
 
     def train(self, env, episode_cnt=1000):
-        self.agent = DeepQNetworkAgent(lr=0.00025, writer=self.writer)
+        self.agent = DeepQNetworkAgent(lr=1.0e-2, writer=self.writer)
         self.iter = 0
         for episode in tqdm(range(episode_cnt)):
             gameStatus = env.reset()
