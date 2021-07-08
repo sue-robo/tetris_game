@@ -230,9 +230,10 @@ class Block_Controller_Manual():
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import ExponentialLR
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import torch.nn.functional as F
-from torch.nn.modules.activation import ReLU
 from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
@@ -318,6 +319,18 @@ class DeepQNetwork(nn.Module):
         return self.net(x)
 
 
+def select_reasonable_action(action_values, num_x, num_direction, xrange_tab):
+    av = action_values.squeeze().detach().numpy()
+    av = av.reshape([num_x, num_direction])
+    mv, md, mx = -np.Inf, -1, -1
+    for d in range(0, num_direction):
+        xmin, xmax = xrange_tab[d]
+        for x in range(xmin, xmax):
+            v = av[x, d]
+            if mv < v:
+                mv, md, mx = v, d, x
+    return mx * num_direction + md # action key
+
 class DeepQNetworkAgent():
     def __init__(self, lr=1.0e-2, writer=None):
         #self.board_h = 22
@@ -344,10 +357,10 @@ class DeepQNetworkAgent():
 
         #self.optimizer = optim.Adam(self.online_model.parameters(), lr=lr)
         #self.criterion = nn.MSELoss()
-        self.optimizer = optim.AdamW(self.online_model.parameters(), lr=lr, )
-        self.criterion = nn.MSELoss()
-        self.scheduler1 = optim.lr_scheduler.ExponentialLR(self.optimizer, 0.9999)
-        self.scheduler2 = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100, eta_min=0.5*lr)
+        self.optimizer = AdamW(self.online_model.parameters(), lr=lr)
+        self.criterion = nn.SmoothL1Loss()
+        self.scheduler1 = ExponentialLR(self.optimizer, gamma=0.99995)
+        #self.scheduler1 = CosineAnnealingWarmRestarts(self.optimizer, T_0=100, T_mult=2, eta_min=0.001)
 
         self.epoch = 0
         self.writer = writer
@@ -411,25 +424,24 @@ class DeepQNetworkAgent():
             if xrange_tab is None:
                 action = torch.argmax(action_values, axis=1).item()
             else:
-                av = action_values.squeeze().detach().numpy()
-                av = av.reshape([self.num_x, self.num_direction])
-                mv, md, mx = -np.Inf, -1, -1
-                for d in range(0, self.num_direction):
-                    xmin, xmax = xrange_tab[d]
-                    for x in range(xmin, xmax):
-                        v = av[x, d]
-                        if mv < v:
-                            mv, md, mx = v, d, x
-                action = mx * self.num_direction + md
+                action = select_reasonable_action(action_values, self.num_x, self.num_direction, xrange_tab)
             self.use_net = True
             self.n_network += 1
         tot = self.n_strategy + self.n_random + self.n_network
         self.writer.flush()
-        self.writer.add_scalar("strategy rate", self.n_strategy/tot, tot)
-        self.writer.add_scalar("random rate", self.n_random/tot, tot)
-        self.writer.add_scalar("network rate", self.n_network/tot, tot)
+        self.writer.add_scalars("policy rate", {
+                                    'strategy' : self.n_strategy/tot,
+                                    'random'   : self.n_random/tot,
+                                    'network'  : self.n_network/tot}, tot)
+        #self.writer.add_scalar("strategy rate", self.n_strategy/tot, tot)
+        #self.writer.add_scalar("random rate", self.n_random/tot, tot)
+        #self.writer.add_scalar("network rate", self.n_network/tot, tot)
         return action
     
+    def lr_step(self):
+        if self.epoch > 0 :
+            self.scheduler1.step()
+
     def update_online(self, gamma):
         if len(self.experience['s']) < self.min_experiences:
             return
@@ -441,12 +453,20 @@ class DeepQNetworkAgent():
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        self.scheduler1.step()
-        self.scheduler2.step()
+        #self.scheduler1.step()
+        #self.scheduler2.step()
         if self.use_net:
             self.writer.flush()
-            self.writer.add_scalar("Loss/train", loss.item(), self.epoch)
-            self.writer.add_scalar("learning rate", self.optimizer.param_groups[0]['lr'], self.epoch)
+            self.writer.add_scalar("Train/loss", loss.item(), self.epoch)
+            self.writer.add_scalars("learning rate",
+                                        {
+                                            'sched1'  : self.scheduler1.get_last_lr()[0],
+                                            #'sched2'  : self.scheduler2.get_last_lr()[0],
+                                            'optimlr' : self.optimizer.param_groups[0]['lr']
+                                        }, self.epoch)
+            #self.writer.add_scalar("lr_scheduler1", self.scheduler1.get_last_lr()[0], self.epoch)
+            #self.writer.add_scalar("lr_scheduler2", self.scheduler2.get_last_lr()[0], self.epoch)
+            #self.writer.add_scalar("learning rate", self.optimizer.param_groups[0]['lr'], self.epoch)
             self.epoch += 1
     
     def update_target(self):
@@ -480,11 +500,11 @@ class DeepQNetworkTrainer():
     def __init__(self):
         self.gamma = 0.6
         self.epsilon = 1.00
-        self.min_epsilon = 0.1
-        self.epsilon_decay_rate = 0.9998
+        self.min_epsilon = 0.05
+        self.epsilon_decay_rate = 0.9999
         self.zehta = 0.99
-        self.min_zehta = 0.7
-        self.zehta_decay_rate = 0.9998
+        self.min_zehta = 0.5
+        self.zehta_decay_rate = 0.9999
 
         self.TARGET_UPDATE = 10
 
@@ -545,9 +565,10 @@ class DeepQNetworkTrainer():
             reward += self.GAMECOMPLETE_BONUS
 
         self.writer.flush()
-        self.writer.add_scalar("Reward", reward, self.iter)
-        self.writer.add_scalar("Hols", features["n_holes"], self.iter)
-        self.writer.add_scalar("High Peaks", features["n_high_peaks"], self.iter)
+        self.writer.add_scalar("Train/reward", reward, self.iter)
+        self.writer.add_scalar("features/n_high_peaks", features["n_high_peaks"], self.iter)
+        self.writer.add_scalar("features/n_holes", features["n_holes"], self.iter)
+        self.writer.add_scalar("features/bumpiness", features["bumpiness"], self.iter)
 
         return reward
 
@@ -578,8 +599,9 @@ class DeepQNetworkTrainer():
                 self.agent.update_online(self.gamma)
                 if self.iter % self.TARGET_UPDATE == 0:
                     self.agent.update_target()
+            self.agent.lr_step()
             self.agent.save_network('dqn.prm', 'dqn_teacher.prm')
-                
+
 class Block_Controller(object):
     def __init__(self):
         self.num_direction = 4
@@ -615,16 +637,7 @@ class Block_Controller(object):
         action_values = self.model(
             torch.from_numpy(state.astype(np.float32)).unsqueeze(0).unsqueeze(1)
         )
-        av = action_values.squeeze().detach().numpy()
-        av = av.reshape([self.num_x, self.num_direction])
-        mv, md, mx = -np.Inf, -1, -1
-        for d in range(0, self.num_direction):
-            xmin, xmax = xrange_tab[d]
-            for x in range(xmin, xmax):
-                v = av[x, d]
-                if mv < v:
-                    mv, md, mx = v, d, x
-        action = mx * self.num_direction + md
+        action = select_reasonable_action(action_values, self.num_x, self.num_direction, xrange_tab)
         nextMove = get_next_move(action)
 
         print("===", datetime.now() - t1)
