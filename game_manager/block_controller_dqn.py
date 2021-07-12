@@ -140,9 +140,7 @@ class Block_Controller_Manual():
             x0Min, x0Max = self.getSearchXRange(CurrentShapeClass, direction0, self.board_width)
             for x0 in range(x0Min, x0Max):
                 board = self.getBoard(backboard, CurrentShapeClass, direction0, x0)
-                # evaluate board
                 EvalValue = self.calcEvaluationValueSample(board)
-                # update best move
                 if EvalValue > LatestEvalValue:
                     strategy = {'direction':direction0, 'x':x0}
                     LatestEvalValue = EvalValue
@@ -297,23 +295,28 @@ class DeepQNetwork(nn.Module):
         super(DeepQNetwork, self).__init__()
         self.net = nn.Sequential(
             nn.Conv2d(1, 16, 3),
+            nn.ReLU(),
             nn.BatchNorm2d(16),
-            nn.ReLU(),
+            nn.Dropout2d(),
             nn.Conv2d(16, 32, 3),
-            nn.BatchNorm2d(32),
             nn.ReLU(),
+            nn.BatchNorm2d(32),
+            nn.Dropout2d(),
             nn.Conv2d(32, 32, 3),
-            nn.BatchNorm2d(32),
             nn.ReLU(),
+            nn.BatchNorm2d(32),
             nn.Flatten(),
             nn.Linear(3072, 1024),
             nn.ReLU(),
+            nn.BatchNorm1d(1024),
+            nn.Dropout(),
             nn.Linear(1024, 256),
             nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.Dropout(),
             nn.Linear(256, output)
         )
-        print(self.net)
-
+        #print(self.net)
     
     def forward(self, x):
         return self.net(x)
@@ -333,9 +336,6 @@ def select_reasonable_action(action_values, num_x, num_direction, xrange_tab):
 
 class DeepQNetworkAgent():
     def __init__(self, lr=1.0e-2, writer=None):
-        #self.board_h = 22
-        #self.board_w = 10
-        #self.block_h = 4
         self.num_direction = 4
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
@@ -355,19 +355,15 @@ class DeepQNetworkAgent():
         self.experience = {'s':[], 'a':[], 'r':[], 'n_s':[], 'done':[]}
         self.batch_size = 64
 
-        #self.optimizer = optim.Adam(self.online_model.parameters(), lr=lr)
-        #self.criterion = nn.MSELoss()
         self.optimizer = AdamW(self.online_model.parameters(), lr=lr)
         self.criterion = nn.SmoothL1Loss()
         self.scheduler1 = ExponentialLR(self.optimizer, gamma=0.99995)
-        #self.scheduler1 = CosineAnnealingWarmRestarts(self.optimizer, T_0=100, T_mult=2, eta_min=0.001)
 
         self.epoch = 0
         self.writer = writer
         self.n_strategy = 0
         self.n_random = 0
         self.n_network = 0
-
 
     def add_experience(self, exp):
         if len(self.experience['s']) >= self.max_experiences:
@@ -429,13 +425,13 @@ class DeepQNetworkAgent():
             self.n_network += 1
         tot = self.n_strategy + self.n_random + self.n_network
         self.writer.flush()
-        self.writer.add_scalars("policy rate", {
+        self.writer.add_scalars("policy rate",
+                                {
                                     'strategy' : self.n_strategy/tot,
                                     'random'   : self.n_random/tot,
-                                    'network'  : self.n_network/tot}, tot)
-        #self.writer.add_scalar("strategy rate", self.n_strategy/tot, tot)
-        #self.writer.add_scalar("random rate", self.n_random/tot, tot)
-        #self.writer.add_scalar("network rate", self.n_network/tot, tot)
+                                    'network'  : self.n_network/tot
+                                },
+                                tot)
         return action
     
     def lr_step(self):
@@ -453,20 +449,15 @@ class DeepQNetworkAgent():
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        #self.scheduler1.step()
-        #self.scheduler2.step()
         if self.use_net:
             self.writer.flush()
             self.writer.add_scalar("Train/loss", loss.item(), self.epoch)
             self.writer.add_scalars("learning rate",
-                                        {
-                                            'sched1'  : self.scheduler1.get_last_lr()[0],
-                                            #'sched2'  : self.scheduler2.get_last_lr()[0],
-                                            'optimlr' : self.optimizer.param_groups[0]['lr']
-                                        }, self.epoch)
-            #self.writer.add_scalar("lr_scheduler1", self.scheduler1.get_last_lr()[0], self.epoch)
-            #self.writer.add_scalar("lr_scheduler2", self.scheduler2.get_last_lr()[0], self.epoch)
-            #self.writer.add_scalar("learning rate", self.optimizer.param_groups[0]['lr'], self.epoch)
+                                    {
+                                        'sched1'  : self.scheduler1.get_last_lr()[0],
+                                        'optimlr' : self.optimizer.param_groups[0]['lr']
+                                    },
+                                    self.epoch)
             self.epoch += 1
     
     def update_target(self):
@@ -504,7 +495,7 @@ class DeepQNetworkTrainer():
         self.epsilon_decay_rate = 0.9999
         self.zehta = 0.99
         self.min_zehta = 0.5
-        self.zehta_decay_rate = 0.9999
+        self.zehta_decay_rate = 0.99995
 
         self.TARGET_UPDATE = 10
 
@@ -555,13 +546,11 @@ class DeepQNetworkTrainer():
             return res
 
         if almost4lines():
-            #print("ALMOST 4 LINES")
             reward += self.ALMOST4LINES_BONUS
         if done:
             reward -= self.GAMEOVER_PENALTY
             self.prev_gameover_count = gameover_count
         if inner_iter >= 178:
-            #print("get GAMECOMPLETE_BONUS")
             reward += self.GAMECOMPLETE_BONUS
 
         self.writer.flush()
@@ -575,7 +564,7 @@ class DeepQNetworkTrainer():
     def train(self, env, episode_cnt=1000):
         self.agent = DeepQNetworkAgent(lr=1.0e-2, writer=self.writer)
         self.iter = 0
-        for episode in tqdm(range(episode_cnt)):
+        for _ in tqdm(range(episode_cnt)):
             gameStatus = env.reset()
             state = get_state(gameStatus)
             self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay_rate)
@@ -609,12 +598,12 @@ class Block_Controller(object):
         self.num_actions = self.num_x * self.num_direction
         self.model = DeepQNetwork(self.num_actions)
         #self.model.load_state_dict(torch.load('./game_manager/dqn.prm'))
+        self.model.eval()
 
     def getSearchXRange(self, ShapeClass, direction, board_width):
-        #
-        # get x range from shape direction.
-        #
-        minX, maxX, _, _ = ShapeClass.getBoundingOffsets(direction) # get shape x offsets[minX,maxX] as relative value.
+        ''' The same as in the BlockControllerSample class
+        '''
+        minX, maxX, _, _ = ShapeClass.getBoundingOffsets(direction)
         xMin = -1 * minX
         xMax = board_width - maxX
         return xMin, xMax
@@ -623,8 +612,8 @@ class Block_Controller(object):
         t1 = datetime.now()
 
         # print GameStatus
-        print("=================================================>")
-        pprint.pprint(GameStatus, width = 61, compact = True)
+        # print("=================================================>")
+        # pprint.pprint(GameStatus, width = 61, compact = True)
 
         cs = GameStatus["block_info"]["currentShape"]["class"]
         bw = GameStatus["field_info"]["width"]
@@ -640,8 +629,8 @@ class Block_Controller(object):
         action = select_reasonable_action(action_values, self.num_x, self.num_direction, xrange_tab)
         nextMove = get_next_move(action)
 
-        print("===", datetime.now() - t1)
-        print(nextMove)
+        # print("===", datetime.now() - t1)
+        # print(nextMove)
         return nextMove
 
 DQN_TRAINER = DeepQNetworkTrainer()
