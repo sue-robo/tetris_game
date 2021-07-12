@@ -151,6 +151,7 @@ class Game_Manager(QMainWindow):
                             self.sidePanel.height() + self.statusbar.height())
 
     def _rotate_operation(self, next_direction):
+        ret = True
         k = 0
         while BOARD_DATA.currentDirection != next_direction and k < 4:
             ret = BOARD_DATA.rotateRight()
@@ -158,8 +159,10 @@ class Game_Manager(QMainWindow):
                 #print("cannot rotateRight")
                 break
             k += 1
+        return ret
 
     def _x_operation(self, next_x):
+        ret = True
         k = 0
         while BOARD_DATA.currentX != next_x and k < 5:
             if BOARD_DATA.currentX > next_x:
@@ -173,6 +176,7 @@ class Game_Manager(QMainWindow):
                     #print("cannot moveRight")
                     break
             k += 1
+        return ret
 
     def _y_operation(self, y_operation, next_y_moveblocknum):
         removedlines, dropdownlines = 0, 0
@@ -202,8 +206,8 @@ class Game_Manager(QMainWindow):
         next_y_moveblocknum = nextMove["strategy"]["y_moveblocknum"]
         y_operation = nextMove["strategy"]["y_operation"]
         next_direction = nextMove["strategy"]["direction"]
-        self._rotate_operation(next_direction) # shape direction operation
-        self._x_operation(next_x) # x operation
+        rope = self._rotate_operation(next_direction) # shape direction operation
+        xope = self._x_operation(next_x) # x operation
         removedlines, dropdownlines = self._y_operation(y_operation, next_y_moveblocknum)
         self.UpdateScore(removedlines, dropdownlines)
         reward = removedlines + dropdownlines * 0.01
@@ -215,9 +219,12 @@ class Game_Manager(QMainWindow):
             reward -= Game_Manager.GAMEOVER_SCORE
             done = True
         GameStatus = self.getGameStatus()
+        GameStatus["debug_info"]["r_operation"] = rope
+        GameStatus["debug_info"]["x_operation"] = xope
+
         self.tboard.updateData()
         self.sidePanel.updateData()
-        self.update()
+        self.update() # QMainWindow
         QTest.qWait(self.qwait_msec)
         return GameStatus, reward, done
 
@@ -466,6 +473,8 @@ class Game_Manager(QMainWindow):
                         },
                         "line_score_stat":"none",
                         "shape_info_stat":"none",
+                        "r_operation":"none",
+                        "x_operation":"none",
                       },
                   }
         # update status

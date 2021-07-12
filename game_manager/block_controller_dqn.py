@@ -295,25 +295,21 @@ class DeepQNetwork(nn.Module):
         super(DeepQNetwork, self).__init__()
         self.net = nn.Sequential(
             nn.Conv2d(1, 16, 3),
-            nn.ReLU(),
             nn.BatchNorm2d(16),
-            nn.Dropout2d(),
+            nn.ReLU(),
             nn.Conv2d(16, 32, 3),
-            nn.ReLU(),
             nn.BatchNorm2d(32),
-            nn.Dropout2d(),
+            nn.ReLU(),
             nn.Conv2d(32, 32, 3),
-            nn.ReLU(),
             nn.BatchNorm2d(32),
+            nn.ReLU(),
             nn.Flatten(),
             nn.Linear(3072, 1024),
-            nn.ReLU(),
             nn.BatchNorm1d(1024),
-            nn.Dropout(),
-            nn.Linear(1024, 256),
             nn.ReLU(),
+            nn.Linear(1024, 256),
             nn.BatchNorm1d(256),
-            nn.Dropout(),
+            nn.ReLU(),
             nn.Linear(256, output)
         )
         #print(self.net)
@@ -402,11 +398,11 @@ class DeepQNetworkAgent():
         next_Q = tgt[np.arange(0, self.batch_size), best_actions]
         return (rewards + (1.0-dones) * gamma * next_Q)
 
-    def act(self, state, epsilon, zehta=0.0, sample_strategy=None, xrange_tab=None):
+    def act(self, state, epsilon, zehta=0.0, reference_strategy=None, xrange_tab=None):
         if np.random.rand() < epsilon:
             if np.random.rand() < zehta:
-                direction = sample_strategy['direction']
-                x = sample_strategy['x']
+                direction = reference_strategy['direction']
+                x = reference_strategy['x']
                 self.n_strategy += 1
             else:
                 direction = np.random.randint(0, self.num_direction)
@@ -537,6 +533,9 @@ class DeepQNetworkTrainer():
         reward = reward - 10.0 if features["average_height"] > 14 else reward
         reward = reward - 10.0 if features["highest_peak"] > 18 else reward
 
+        reward = reward - 200.0 if not GameStatus["debug_info"]["r_operation"] else reward
+        reward = reward - 200.0 if not GameStatus["debug_info"]["x_operation"] else reward
+
         def almost4lines():
             res = features["n_pits"] == 1
             res = res and features["max_wells"] >= 4
@@ -572,13 +571,13 @@ class DeepQNetworkTrainer():
             inner_iter, done = 0, False
             while not done and inner_iter < 180:
                 self.iter, inner_iter = self.iter + 1, inner_iter + 1
-                sample_strategy = self.block_controller_sample.get_act(gameStatus)
+                reference_strategy = self.block_controller_sample.get_act(gameStatus)
                 cs = gameStatus["block_info"]["currentShape"]["class"]
                 bw = gameStatus["field_info"]["width"]
                 xrange_tab = []
                 for d in range(0,4):
                     xrange_tab.append(self.block_controller_sample.getSearchXRange(cs, d, bw))
-                action = self.agent.act(state, self.epsilon, self.zehta, sample_strategy, xrange_tab)
+                action = self.agent.act(state, self.epsilon, self.zehta, reference_strategy)
                 nextMove = get_next_move(action)
                 gameStatus, reward, done = env.step(nextMove)
                 prev_state, state = state, get_state(gameStatus)
