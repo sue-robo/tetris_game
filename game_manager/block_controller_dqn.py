@@ -222,8 +222,10 @@ class Block_Controller_Manual():
         score = score - 1.0 * features["row_transitions"]
         score = score - 2.0 * (features["col_transitions"] - 10)
         score = score - 5.0 if features["max_wells_inner"] >= 3 else score
-        score = score - 10.0 if features["average_height"] > 14 else score
-        score = score - 10.0 if features["highest_peak"] > 18 else score
+        score = score - 10.0 if features["average_height"] > 10 else score
+        score = score - 20.0 if features["average_height"] > 14 else score
+        score = score - 10.0 if features["highest_peak"] > 12 else score
+        score = score - 20.0 if features["highest_peak"] > 16 else score
         return score
 
 import torch
@@ -294,18 +296,19 @@ class DeepQNetwork(nn.Module):
     def __init__(self, output):
         super(DeepQNetwork, self).__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(1, 16, 3),
+            # 1 x 30 x 10
+            nn.Conv2d(in_channels=1 , out_channels=32, kernel_size=5, padding=2),
+            nn.ReLU(),
+            # 32 x 30 x 10
+            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3),
+            nn.ReLU(),
+            # 32 x 28 x 8
+            nn.Conv2d(in_channels=32, out_channels=16, kernel_size=3),
             nn.BatchNorm2d(16),
             nn.ReLU(),
-            nn.Conv2d(16, 32, 3),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, 3),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
+            # 16 x 26 x 6
             nn.Flatten(),
-            nn.Linear(3072, 1024),
-            nn.BatchNorm1d(1024),
+            nn.Linear(2496, 1024),
             nn.ReLU(),
             nn.Linear(1024, 256),
             nn.BatchNorm1d(256),
@@ -331,7 +334,7 @@ def select_reasonable_action(action_values, num_x, num_direction, xrange_tab):
     return mx * num_direction + md # action key
 
 class DeepQNetworkAgent():
-    def __init__(self, lr=1.0e-2, writer=None):
+    def __init__(self, writer=None):
         self.num_direction = 4
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
@@ -346,14 +349,14 @@ class DeepQNetworkAgent():
             p.requires_grad = False
         self.target_model.eval()
 
-        self.max_experiences = 3000
-        self.min_experiences = 300
+        self.max_experiences = 1000
+        self.min_experiences = 100
         self.experience = {'s':[], 'a':[], 'r':[], 'n_s':[], 'done':[]}
-        self.batch_size = 64
+        self.batch_size = 32
 
-        self.optimizer = AdamW(self.online_model.parameters(), lr=lr)
+        self.optimizer = AdamW(self.online_model.parameters(), lr=0.5e-2)
         self.criterion = nn.SmoothL1Loss()
-        self.scheduler1 = ExponentialLR(self.optimizer, gamma=0.99995)
+        self.scheduler1 = ExponentialLR(self.optimizer, gamma=0.99998)
 
         self.epoch = 0
         self.writer = writer
@@ -498,7 +501,6 @@ class DeepQNetworkTrainer():
         self.agent = None
         self.reward_log = []
         self.prev_line_score_stat = [0, 0, 0, 0]
-        self.prev_gameover_count = 0
         self.block_controller_sample = Block_Controller_Manual()
 
         self.iter = 0
@@ -521,21 +523,6 @@ class DeepQNetworkTrainer():
             line_reward += lr * (ls - pls)
             self.prev_line_score_stat[i] = line_score_stat[i]
 
-        reward += 0.1 * inner_iter
-        reward += line_reward
-        reward -= 5.0 * features["n_high_peaks"]
-        reward -= 7.0 * features["n_holes"]
-        reward -= 10.0 * features["n_col_with_holes"]
-        reward -= 0.5 * features["bumpiness"]
-        reward -= 1.0 * features["row_transitions"]
-        reward -= 2.0 * (features["col_transitions"] - 10)
-        reward = reward - 5.0 if features["max_wells_inner"] >= 3 else reward
-        reward = reward - 10.0 if features["average_height"] > 14 else reward
-        reward = reward - 10.0 if features["highest_peak"] > 18 else reward
-
-        reward = reward - 200.0 if not GameStatus["debug_info"]["r_operation"] else reward
-        reward = reward - 200.0 if not GameStatus["debug_info"]["x_operation"] else reward
-
         def almost4lines():
             res = features["n_pits"] == 1
             res = res and features["max_wells"] >= 4
@@ -544,13 +531,27 @@ class DeepQNetworkTrainer():
             res = res and features["n_col_with_holes"] == 0
             return res
 
-        if almost4lines():
-            reward += self.ALMOST4LINES_BONUS
-        if done:
-            reward -= self.GAMEOVER_PENALTY
-            self.prev_gameover_count = gameover_count
-        if inner_iter >= 178:
-            reward += self.GAMECOMPLETE_BONUS
+        reward = reward + 0.1 * inner_iter
+        reward = reward + line_reward
+        reward = reward + self.ALMOST4LINES_BONUS if almost4lines() else reward
+        reward = reward + self.GAMECOMPLETE_BONUS if inner_iter >= 178 else reward
+
+        reward = reward - 5.0 * features["n_high_peaks"]
+        reward = reward - 7.0 * features["n_holes"]
+        reward = reward - 10.0 * features["n_col_with_holes"]
+        reward = reward - 0.5 * features["bumpiness"]
+        reward = reward - 1.0 * features["row_transitions"]
+        reward = reward - 2.0 * (features["col_transitions"] - 10)
+        reward = reward - 5.0 if features["max_wells_inner"] >= 3 else reward
+        reward = reward - 10.0 if features["average_height"] > 10 else reward
+        reward = reward - 20.0 if features["average_height"] > 14 else reward
+        reward = reward - 10.0 if features["highest_peak"] > 12 else reward
+        reward = reward - 20.0 if features["highest_peak"] > 16 else reward
+
+        reward = reward - 200.0 if not GameStatus["debug_info"]["r_operation"] else reward
+        reward = reward - 200.0 if not GameStatus["debug_info"]["x_operation"] else reward
+
+        reward = reward - self.GAMEOVER_PENALTY if done else reward
 
         self.writer.flush()
         self.writer.add_scalar("Train/reward", reward, self.iter)
@@ -561,7 +562,7 @@ class DeepQNetworkTrainer():
         return reward
 
     def train(self, env, episode_cnt=1000):
-        self.agent = DeepQNetworkAgent(lr=1.0e-2, writer=self.writer)
+        self.agent = DeepQNetworkAgent(writer=self.writer)
         self.iter = 0
         for _ in tqdm(range(episode_cnt)):
             gameStatus = env.reset()
