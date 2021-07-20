@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ## default value
-VALUE_L="1"
+VALUE_L="2"
 IS_MANUAL_CONTROLL="n"
 IS_SAMPLE_CONTROLL="n"
 GAME_TIME="180"                  # game time (s)
