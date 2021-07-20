@@ -202,7 +202,7 @@ class Block_Controller_Manual():
         return _board
 
     def calcEvaluationValueSample(self, board):
-        flbonus = [10.0, 20.0, 50.0, 120.0]
+        flbonus = [10.0, 30.0, 100.0, 200.0]
 
         height = self.board_height
         width = self.board_width
@@ -215,15 +215,15 @@ class Block_Controller_Manual():
             fl += b * l
         score = 0.0
         score = score + 1.0 * fl
-        score = score - 5.0 * features["n_high_peaks"]
+        score = score - 7.0 * features["n_high_peaks"]
         score = score - 7.0 * features["n_holes"]
         score = score - 10.0 * features["n_col_with_holes"]
         score = score - 0.5 * features["bumpiness"]
         score = score - 1.0 * features["row_transitions"]
         score = score - 2.0 * (features["col_transitions"] - 10)
         score = score - 5.0 if features["max_wells_inner"] >= 3 else score
-        score = score - 10.0 if features["average_height"] > 10 else score
-        score = score - 20.0 if features["average_height"] > 14 else score
+        score = score - 10.0 if features["average_height"] > 8 else score
+        score = score - 20.0 if features["average_height"] > 12 else score
         score = score - 10.0 if features["highest_peak"] > 12 else score
         score = score - 20.0 if features["highest_peak"] > 16 else score
         return score
@@ -295,30 +295,38 @@ def get_state(GameStatus):
 class DeepQNetwork(nn.Module):
     def __init__(self, output):
         super(DeepQNetwork, self).__init__()
-        self.net = nn.Sequential(
+        self.board_h = 22 + 4 + 4
+        self.board_w = 10
+        self.nout_board = self.board_h * self.board_w * 16
+        self.net_board = nn.Sequential(
             # 1 x 30 x 10
             nn.Conv2d(in_channels=1 , out_channels=32, kernel_size=5, padding=2),
             nn.ReLU(),
             # 32 x 30 x 10
-            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3),
+            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=5, padding=2),
             nn.ReLU(),
-            # 32 x 28 x 8
-            nn.Conv2d(in_channels=32, out_channels=16, kernel_size=3),
+            # 32 x 30 x 10
+            nn.Conv2d(in_channels=32, out_channels=16, kernel_size=5, padding=2),
             nn.BatchNorm2d(16),
             nn.ReLU(),
-            # 16 x 26 x 6
+            # 16 x 30 x 10
             nn.Flatten(),
-            nn.Linear(2496, 1024),
+            nn.Linear(self.nout_board, 2048),
             nn.ReLU(),
-            nn.Linear(1024, 256),
+        )
+        self.net_connect = nn.Sequential(
+            nn.Linear(2048, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Linear(256, output)
         )
         #print(self.net)
     
-    def forward(self, x):
-        return self.net(x)
+    def forward(self, board):
+        x = self.net_board(board)
+        return self.net_connect(x)
 
 
 def select_reasonable_action(action_values, num_x, num_direction, xrange_tab):
@@ -354,7 +362,7 @@ class DeepQNetworkAgent():
         self.experience = {'s':[], 'a':[], 'r':[], 'n_s':[], 'done':[]}
         self.batch_size = 32
 
-        self.optimizer = AdamW(self.online_model.parameters(), lr=0.5e-2)
+        self.optimizer = AdamW(self.online_model.parameters(), lr=1.0e-3)
         self.criterion = nn.SmoothL1Loss()
         self.scheduler1 = ExponentialLR(self.optimizer, gamma=0.99998)
 
@@ -509,7 +517,7 @@ class DeepQNetworkTrainer():
         self.ALMOST4LINES_BONUS = 20.0
         self.GAMEOVER_PENALTY = 500.0
         self.GAMECOMPLETE_BONUS = 100.0
-        self.LINE_REWARDS = [10.0, 20.0, 50.0, 120.0]
+        self.LINE_REWARDS = [10.0, 30.0, 100.0, 200.0]
 
     def _custom_reward(self, GameStatus, done, inner_iter):
         reward = 0.0
@@ -536,15 +544,15 @@ class DeepQNetworkTrainer():
         reward = reward + self.ALMOST4LINES_BONUS if almost4lines() else reward
         reward = reward + self.GAMECOMPLETE_BONUS if inner_iter >= 178 else reward
 
-        reward = reward - 5.0 * features["n_high_peaks"]
+        reward = reward - 7.0 * features["n_high_peaks"]
         reward = reward - 7.0 * features["n_holes"]
         reward = reward - 10.0 * features["n_col_with_holes"]
         reward = reward - 0.5 * features["bumpiness"]
         reward = reward - 1.0 * features["row_transitions"]
         reward = reward - 2.0 * (features["col_transitions"] - 10)
         reward = reward - 5.0 if features["max_wells_inner"] >= 3 else reward
-        reward = reward - 10.0 if features["average_height"] > 10 else reward
-        reward = reward - 20.0 if features["average_height"] > 14 else reward
+        reward = reward - 10.0 if features["average_height"] > 8 else reward
+        reward = reward - 20.0 if features["average_height"] > 12 else reward
         reward = reward - 10.0 if features["highest_peak"] > 12 else reward
         reward = reward - 20.0 if features["highest_peak"] > 16 else reward
 
