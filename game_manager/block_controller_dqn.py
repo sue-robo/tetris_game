@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+import os
 import numpy as np
 from datetime import datetime
 import pprint
@@ -230,7 +231,7 @@ class Block_Controller_Manual():
 
 import torch
 import torch.nn as nn
-from torch.optim import AdamW
+from torch.optim import Adam
 from torch.optim.lr_scheduler import ExponentialLR
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import torch.nn.functional as F
@@ -346,13 +347,11 @@ class DeepQNetworkAgent():
         self.num_direction = 4
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
+
+        self.lr = 5.0e-4
         self.online_model = DeepQNetwork(self.num_actions)
         self.target_model = DeepQNetwork(self.num_actions)
         
-        ''' if use existing network model, activate following two lines
-        self.online_model.load_state_dict(torch.load('./dqn.prm'))
-        self.target_model.load_state_dict(torch.load('./dqn_teacher.prm'))
-        '''
         for p in self.target_model.parameters():
             p.requires_grad = False
         self.target_model.eval()
@@ -362,15 +361,23 @@ class DeepQNetworkAgent():
         self.experience = {'s':[], 'a':[], 'r':[], 'n_s':[], 'done':[]}
         self.batch_size = 32
 
-        self.optimizer = AdamW(self.online_model.parameters(), lr=1.0e-3)
+        self.optimizer = Adam(self.online_model.parameters(), lr=self.lr)
         self.criterion = nn.SmoothL1Loss()
-        self.scheduler1 = ExponentialLR(self.optimizer, gamma=0.99998)
-
+        self.losses = []
         self.epoch = 0
+        self.use_net_epoch = 0
+
+
         self.writer = writer
         self.n_strategy = 0
         self.n_random = 0
         self.n_network = 0
+
+        self.online_model_cpt = './game_manager/dqn.cpt'
+        self.target_model_prm = './game_manager/dqn_teacher.prm'
+        if os.path.isfile(self.online_model_cpt) and os.path.isfile(self.target_model_prm):
+            print('load checkpoint')
+            self.load_checkpoint()
 
     def add_experience(self, exp):
         if len(self.experience['s']) >= self.max_experiences:
@@ -442,7 +449,7 @@ class DeepQNetworkAgent():
         return action
     
     def lr_step(self):
-        if self.epoch > 0 :
+        if self.use_net_epoch > 0 :
             self.scheduler1.step()
 
     def update_online(self, gamma):
@@ -458,27 +465,36 @@ class DeepQNetworkAgent():
         self.optimizer.step()
         if self.use_net:
             self.writer.flush()
-            self.writer.add_scalar("Train/loss", loss.item(), self.epoch)
+            self.writer.add_scalar("Train/loss", loss.item(), self.use_net_epoch)
             self.writer.add_scalars("learning rate",
                                     {
-                                        'sched1'  : self.scheduler1.get_last_lr()[0],
                                         'optimlr' : self.optimizer.param_groups[0]['lr']
                                     },
-                                    self.epoch)
-            self.epoch += 1
+                                    self.use_net_epoch)
+            self.use_net_epoch += 1
+        self.epoch += 1
+        self.losses.append(loss.item())
     
     def update_target(self):
         self.target_model.load_state_dict(self.online_model.state_dict())
 
-    def save_network(self, online_model_path, target_model_path):
-        torch.save(self.online_model.state_dict(), online_model_path)
-        torch.save(self.target_model.state_dict(), target_model_path)
+    def save_checkpoint(self):
+        torch.save({
+            'epoch':self.epoch,
+            'model_state_dict': self.online_model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'losses': self.losses
+            }, self.online_model_cpt)
+        torch.save(self.target_model.state_dict(), self.target_model_prm)
 
-    def load_network(self, online_model_path, target_model_path=None):
-        self.online_model.load_state_dict(torch.load(online_model_path))
-        if target_model_path is not None:
-            self.target_model.load_state_dict(torch.load(target_model_path))
-
+    def load_checkpoint(self):
+        online_cpt = torch.load(self.online_model_cpt)
+        self.online_model.load_state_dict(online_cpt['model_state_dict'])
+        self.optimizer.load_state_dict(online_cpt['optimizer_state_dict'])
+        self.epoch = online_cpt['epoch']
+        self.losses = online_cpt['losses']
+        self.target_model.load_state_dict(torch.load(self.target_model_prm))
+    
 def get_next_move(action):
     direction = action % 4
     x = action // 4
@@ -596,8 +612,8 @@ class DeepQNetworkTrainer():
                 self.agent.update_online(self.gamma)
                 if self.iter % self.TARGET_UPDATE == 0:
                     self.agent.update_target()
-            self.agent.lr_step()
-            self.agent.save_network('dqn.prm', 'dqn_teacher.prm')
+            #self.agent.lr_step()
+            self.agent.save_checkpoint()
 
 class Block_Controller(object):
     def __init__(self):
@@ -605,7 +621,10 @@ class Block_Controller(object):
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction
         self.model = DeepQNetwork(self.num_actions)
-        #self.model.load_state_dict(torch.load('./game_manager/dqn.prm'))
+        model_path = './game_manager/dqn.cpt'
+        if os.path.isfile(model_path):
+            model_cpt = torch.load(model_path)
+            self.model.load_state_dict(model_cpt['model_state_dict'])
         self.model.eval()
 
     def getSearchXRange(self, ShapeClass, direction, board_width):
