@@ -448,10 +448,6 @@ class DeepQNetworkAgent():
                                 tot)
         return action
     
-    def lr_step(self):
-        if self.use_net_epoch > 0 :
-            self.scheduler1.step()
-
     def update_online(self, gamma):
         if len(self.experience['s']) < self.min_experiences:
             return
@@ -473,7 +469,7 @@ class DeepQNetworkAgent():
                                     self.use_net_epoch)
             self.use_net_epoch += 1
         self.epoch += 1
-        self.losses.append(loss.item())
+        #self.losses.append(loss.item())
     
     def update_target(self):
         self.target_model.load_state_dict(self.online_model.state_dict())
@@ -492,7 +488,7 @@ class DeepQNetworkAgent():
         self.online_model.load_state_dict(online_cpt['model_state_dict'])
         self.optimizer.load_state_dict(online_cpt['optimizer_state_dict'])
         self.epoch = online_cpt['epoch']
-        self.losses = online_cpt['losses']
+        #self.losses = online_cpt['losses']
         self.target_model.load_state_dict(torch.load(self.target_model_prm))
     
 def get_next_move(action):
