@@ -348,7 +348,7 @@ class DeepQNetworkAgent():
         self.num_x = 10
         self.num_actions = self.num_x * self.num_direction # range(x) * range(direction)
 
-        self.lr = 5.0e-4
+        self.lr = 2.5e-4
         self.online_model = DeepQNetwork(self.num_actions)
         self.target_model = DeepQNetwork(self.num_actions)
         
@@ -378,6 +378,7 @@ class DeepQNetworkAgent():
         if os.path.isfile(self.online_model_cpt) and os.path.isfile(self.target_model_prm):
             print('load checkpoint')
             self.load_checkpoint()
+            self.optimizer.param_groups[0]['lr'] = self.lr
 
     def add_experience(self, exp):
         if len(self.experience['s']) >= self.max_experiences:
